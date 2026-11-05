@@ -1,5 +1,9 @@
 {
   "expo": {
+    "scheme": "prioritycareapp",
+    "experiments": {
+      "typedRoutes": true
+    },
     "name": "Priority-Care",
     "slug": "Priority-Care",
     "version": "1.0.0",
@@ -15,10 +19,21 @@
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
-      }
+      },
+      "package": "com.anonymous.PriorityCare"
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-status-bar",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "PriorityCare uses your location to send it with an SOS, report hazards, and show the nearest evacuation centre."
+        }
+      ]
+    ]
   }
 }
