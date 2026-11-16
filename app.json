@@ -33,7 +33,17 @@
         {
           "locationWhenInUsePermission": "PriorityCare uses your location to send it with an SOS, report hazards, and show the nearest evacuation centre."
         }
-      ]
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#DC2626",
+          "sounds": [
+            "./assets/sounds/sos_siren.wav"
+          ]
+        }
+      ],
+      "expo-audio"
     ]
   }
 }

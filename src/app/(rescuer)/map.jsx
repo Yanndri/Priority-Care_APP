@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Modal, TextInput, Alert, Image, ScrollView, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams } from 'expo-router';
@@ -95,6 +95,23 @@ export default function RescuerMapScreen() {
   const [selectedHazardPin, setSelectedHazardPin] = useState(null);
 
   const [focusedResidentId, setFocusedResidentId] = useState(params.focusResidentId || null);
+  // Set when "Show on map" is pressed on a disaster: the map flies to it.
+  const disasterFocus = useMemo(() => (params.focusDisasterTs ? {
+    key: String(params.focusDisasterTs),
+    lat: params.focusDisasterLat ? Number(params.focusDisasterLat) : null,
+    lng: params.focusDisasterLng ? Number(params.focusDisasterLng) : null,
+    label: params.focusDisasterLabel || 'Disaster',
+    note: params.focusDisasterNote || '',
+    icon: params.focusDisasterIcon || '⚠️',
+    barangay: params.focusDisasterBarangay || '',
+  } : null), [params.focusDisasterTs]);
+  useEffect(() => {
+    if (!disasterFocus) return;
+    setFocusedResidentId(null);
+    setSelectedResident(null);
+    setSelectedHazardPin(null);
+    setSelectedBarangay(null);
+  }, [disasterFocus]);
   const [showActiveSosOnly, setShowActiveSosOnly] = useState(true);
 
   const [gpsMode, setGpsMode] = useState('SIMULATED');
@@ -631,6 +648,7 @@ export default function RescuerMapScreen() {
         selectedBarangay={selectedBarangay}
         selectedResident={selectedResident}
         selectedHazardPin={selectedHazardPin}
+        focusPoint={disasterFocus}
         onPinSelect={(res) => {
           setSelectedBarangay(null);
           setSelectedHazardPin(null);

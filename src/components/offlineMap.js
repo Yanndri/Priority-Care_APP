@@ -18,6 +18,7 @@ export default function OfflineMap({
   userGpsCoords = null,
   triggerGpsQuery = 0,
   selectedBarangay = null,
+  focusPoint = null, // { key, lat, lng, label, note, icon, barangay }: flies to a disaster and marks it
   selectedResident = null,
   selectedHazardPin = null,
   onPinSelect,
@@ -30,9 +31,11 @@ export default function OfflineMap({
   onGpsLocationError,
 }) {
   const webViewRef = useRef(null);
+  const focusedKey = useRef(null);
 
   const pushStateToWebView = useCallback(() => {
     if (!webViewRef.current) return;
+    const doFocus = Boolean(focusPoint && focusedKey.current !== focusPoint.key);
 
     webViewRef.current.injectJavaScript(`
       if (typeof window.syncCachedSectors === 'function') {
@@ -63,7 +66,14 @@ export default function OfflineMap({
           : ''
       }
       ${
-        selectedResident
+        doFocus
+          ? `if (typeof window.focusDisasterPoint === 'function') { window.focusDisasterPoint(${JSON.stringify(focusPoint)}); }`
+          : ''
+      }
+      ${
+        doFocus
+          ? ''
+          : selectedResident
           ? `if (typeof window.focusResidentLocation === 'function') { window.focusResidentLocation(${JSON.stringify(selectedResident)}); }`
           : selectedHazardPin
           ? `if (typeof window.focusHazardLocation === 'function') { window.focusHazardLocation(${JSON.stringify(selectedHazardPin)}); }`
@@ -73,6 +83,7 @@ export default function OfflineMap({
       }
       true;
     `);
+    if (doFocus) focusedKey.current = focusPoint.key;
   }, [
     cachedSectors,
     residents,
@@ -87,6 +98,7 @@ export default function OfflineMap({
     selectedResident,
     selectedHazardPin,
     selectedBarangay,
+    focusPoint,
   ]);
 
   useEffect(() => {
@@ -153,6 +165,15 @@ export default function OfflineMap({
             box-shadow: 0 0 0 2.5px rgba(245, 158, 11, 0.45), 0 2px 4px rgba(0,0,0,0.4) !important;
           }
 
+          .disaster-pin {
+            width: 40px; height: 40px; border-radius: 20px; background: #DC2626; border: 3px solid #FFF;
+            display: flex; align-items: center; justify-content: center; font-size: 20px;
+            box-shadow: 0 0 0 6px rgba(220, 38, 38, 0.35); animation: disasterPulse 1.4s infinite;
+          }
+          @keyframes disasterPulse {
+            0% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.6); }
+            100% { box-shadow: 0 0 0 22px rgba(220, 38, 38, 0); }
+          }
           .focused-pin {
             width: 16px;
             height: 16px;
@@ -654,6 +675,33 @@ export default function OfflineMap({
             map.flyTo([haz.lat, haz.lng], 17, { animate: true, duration: 0.5 });
           };
 
+          // Flies to a declared disaster and drops a pulsing red pin on it. Without exact
+          // coordinates it zooms to the disaster's barangay instead.
+          var disasterMarker = null;
+          window.focusDisasterPoint = function(p) {
+            if (!p) return;
+            if (disasterMarker) { map.removeLayer(disasterMarker); disasterMarker = null; }
+            if (p.lat && p.lng) {
+              var icon = L.divIcon({
+                className: 'disaster-pin-wrapper',
+                html: '<div class="disaster-pin">' + escapeHtml(p.icon || '⚠️') + '</div>',
+                iconSize: [40, 40],
+                iconAnchor: [20, 20]
+              });
+              disasterMarker = L.marker([p.lat, p.lng], { icon: icon, zIndexOffset: 1000 })
+                .addTo(map)
+                .bindPopup('<b>' + escapeHtml(p.label || 'Disaster') + '</b>' + (p.note ? '<br>' + escapeHtml(p.note) : ''));
+              map.flyTo([p.lat, p.lng], 16, { animate: true, duration: 0.8 });
+              setTimeout(function() { if (disasterMarker) disasterMarker.openPopup(); }, 900);
+            } else if (p.barangay) {
+              var want = String(p.barangay).toLowerCase().replace(/[^a-z]/g, '');
+              var name = Object.keys(barangayLayers).filter(function(k) {
+                return k.toLowerCase().replace(/[^a-z]/g, '') === want;
+              })[0];
+              if (name) map.fitBounds(barangayLayers[name].getBounds(), { padding: [35, 35], maxZoom: 16 });
+            }
+          };
+
           window.clearSelectionOverlays = function() {
             window.clearBarangayHighlight();
             if (selectedHomeMarker) { map.removeLayer(selectedHomeMarker); selectedHomeMarker = null; }
@@ -693,7 +741,7 @@ export default function OfflineMap({
         source={{ html }}
         style={styles.map}
         geolocationEnabled={true}
-        onLoadEnd={pushStateToWebView}
+        onLoadEnd={() => { focusedKey.current = null; pushStateToWebView(); }}
         onMessage={(event) => {
           try {
             const message = JSON.parse(event.nativeEvent.data);

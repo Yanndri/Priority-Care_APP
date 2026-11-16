@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useLocalSearchParams } from 'expo-router';
 import { View, Text, StyleSheet, TouchableOpacity, Modal, TextInput, Alert, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import OfflineMap from '../../components/offlineMap';
@@ -15,6 +16,17 @@ const TOWN_CENTRE = { lat: 10.2546, lng: 123.952 };
 
 export default function ResidentEvacMapScreen() {
   const insets = useSafeAreaInsets();
+  const params = useLocalSearchParams();
+  // Set when "Show on map" is pressed on a disaster: the map flies to it.
+  const disasterFocus = useMemo(() => (params.focusDisasterTs ? {
+    key: String(params.focusDisasterTs),
+    lat: params.focusDisasterLat ? Number(params.focusDisasterLat) : null,
+    lng: params.focusDisasterLng ? Number(params.focusDisasterLng) : null,
+    label: params.focusDisasterLabel || 'Disaster',
+    note: params.focusDisasterNote || '',
+    icon: params.focusDisasterIcon || '⚠️',
+    barangay: params.focusDisasterBarangay || '',
+  } : null), [params.focusDisasterTs]);
   const { profile } = useSession();
   const resident = profile?.resident || {};
   const homeCoords = resident.gps_lat != null
@@ -176,6 +188,7 @@ export default function ResidentEvacMapScreen() {
         isSettingSimGps={isSettingSimGps}
         isDroppingHazard={isDroppingHazard}
         triggerGpsQuery={triggerGpsQuery}
+        focusPoint={disasterFocus}
         onHazardCoordinateDrop={(c) => {
           setIsDroppingHazard(false);
           setPendingCoords(c);
