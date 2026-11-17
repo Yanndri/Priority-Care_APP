@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Alert, Image, Modal, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -7,6 +7,7 @@ import * as Location from 'expo-location';
 import { listBarangays, normalizeContact, registerResident } from '../../services/api';
 import { useSession } from '../../components/SessionProvider';
 import HomeLocationPicker from '../../components/HomeLocationPicker';
+import BirthdatePicker from '../../components/BirthdatePicker';
 import {
   ID_TYPES,
   RESIDENT_CATEGORIES,
@@ -76,6 +77,21 @@ export default function RegisterScreen() {
   const [facadeImage, setFacadeImage] = useState(null);
   const facadeImageUri = facadeImage?.uri;
   const [showPreview, setShowPreview] = useState(false);
+
+  // Inline field errors: key -> message shown in red under the field
+  const [errors, setErrors] = useState({});
+  const scrollRef = useRef(null);
+  const fieldY = useRef({});
+  const at = (key) => (e) => { fieldY.current[key] = e.nativeEvent.layout.y; };
+  const clearErr = (...keys) => setErrors((prev) => {
+    if (!keys.some((k) => prev[k])) return prev;
+    const next = { ...prev };
+    keys.forEach((k) => delete next[k]);
+    return next;
+  });
+  const err = (key) => (errors[key] ? <Text style={styles.errorText}>{errors[key]}</Text> : null);
+  const inp = (key) => [styles.input, errors[key] && styles.inputError];
+  useEffect(() => { if (idImage) clearErr('idImage'); }, [idImage]);
 
   useEffect(() => {
     listBarangays().then(setBarangays).catch(() => setBarangays([]));
@@ -164,19 +180,26 @@ export default function RegisterScreen() {
   const pregnantCount = allRoster.filter((m) => m.category === 'pregnant').length;
 
   const handleSubmit = async () => {
-    const missing = [];
-    if (!firstName.trim() || !lastName.trim()) missing.push('first and last name');
-    if (!/^09\d{9}$/.test(normalizeContact(contact))) missing.push('a mobile number like 09171234567');
-    if (!sex) missing.push('sex');
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(birthdate) || Number.isNaN(Date.parse(birthdate))) missing.push('birthdate as YYYY-MM-DD');
-    if (!barangay) missing.push('barangay');
-    if (!emergName.trim() || !emergContact.trim()) missing.push('an emergency contact');
-    if (!/^\d{6}$/.test(pin)) missing.push('a 6-digit PIN');
-    else if (pin !== pinConfirm) missing.push('matching PINs');
-    if (!idNumber.trim() || !idImage) missing.push('your ID number and ID photo');
-    if (members.some((m) => !m.name.trim())) missing.push('a name for every household member (or remove the empty ones)');
-    if (missing.length) {
-      return Alert.alert('Required Fields', `Please add ${missing.join(', ')}.`);
+    const next = {};
+    if (!firstName.trim()) next.firstName = 'Enter your first name.';
+    if (!lastName.trim()) next.lastName = 'Enter your last name.';
+    if (!/^09\d{9}$/.test(normalizeContact(contact))) next.contact = 'Enter an 11-digit mobile number starting with 09, e.g. 09171234567.';
+    if (!sex) next.sex = 'Choose Female or Male.';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(birthdate) || Number.isNaN(Date.parse(birthdate))) next.birthdate = 'Choose your birthdate.';
+    if (!barangay) next.barangay = 'Choose your barangay.';
+    if (!emergName.trim()) next.emergName = 'Enter an emergency contact person.';
+    if (!emergContact.trim()) next.emergContact = "Enter the emergency contact's number.";
+    if (!idNumber.trim()) next.idNumber = 'Enter your ID number.';
+    if (!idImage) next.idImage = 'Upload a photo of your ID.';
+    members.forEach((m) => { if (!m.name.trim()) next[`member_${m.id}`] = "Enter this member's name, or remove them."; });
+    if (!/^\d{6}$/.test(pin)) next.pin = 'PIN must be exactly 6 digits.';
+    else if (pin !== pinConfirm) next.pinConfirm = "PINs don't match.";
+    setErrors(next);
+    const keys = Object.keys(next);
+    if (keys.length) {
+      const ys = keys.map((k) => fieldY.current[k]).filter((y) => typeof y === 'number');
+      if (ys.length) scrollRef.current?.scrollTo({ y: Math.max(0, Math.min(...ys) - 40), animated: true });
+      return;
     }
     const score = calculateVPI({ semiCount, nonAmbulatoryCount, childrenCount, seniorsCount, pregnantCount, houseType });
     const priority = getVPIPriority(score);
@@ -208,38 +231,44 @@ export default function RegisterScreen() {
 
   return (
     <View style={[styles.container, { paddingBottom: insets.bottom }]}>
-      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+      <ScrollView ref={scrollRef} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
         {/* 1. Head of Household */}
         <Text style={styles.sectionHeader}>1. HEAD OF HOUSEHOLD REPRESENTATIVE</Text>
-        <TextInput style={styles.input} placeholder="First Name (e.g., Maria)" value={firstName} onChangeText={setFirstName} />
+        <TextInput style={inp('firstName')} onLayout={at('firstName')} placeholder="First Name (e.g., Maria)" value={firstName} onChangeText={(v) => { setFirstName(v); clearErr('firstName'); }} />
+        {err('firstName')}
         <TextInput style={styles.input} placeholder="Middle Name (optional)" value={middleName} onChangeText={setMiddleName} />
-        <TextInput style={styles.input} placeholder="Last Name (e.g., Santos)" value={lastName} onChangeText={setLastName} />
-        <TextInput style={styles.input} placeholder="Contact Number (09XXXXXXXXX)" keyboardType="phone-pad" value={contact} onChangeText={setContact} />
-        <View style={styles.row}>
+        <TextInput style={inp('lastName')} onLayout={at('lastName')} placeholder="Last Name (e.g., Santos)" value={lastName} onChangeText={(v) => { setLastName(v); clearErr('lastName'); }} />
+        {err('lastName')}
+        <TextInput style={inp('contact')} onLayout={at('contact')} placeholder="Contact Number (09XXXXXXXXX)" keyboardType="phone-pad" maxLength={13} value={contact} onChangeText={(v) => { setContact(v); clearErr('contact'); }} />
+        {err('contact')}
+        <View style={styles.row} onLayout={at('sex')}>
           {[{ id: 'female', label: '♀ Female' }, { id: 'male', label: '♂ Male' }].map((o) => (
-            <TouchableOpacity key={o.id} style={[styles.pill, sex === o.id && styles.pillActive]} onPress={() => setSex(o.id)}>
+            <TouchableOpacity key={o.id} style={[styles.pill, sex === o.id && styles.pillActive, errors.sex && styles.inputError]} onPress={() => { setSex(o.id); clearErr('sex'); }}>
               <Text style={[styles.pillText, sex === o.id && styles.pillTextActive]}>{o.label}</Text>
             </TouchableOpacity>
           ))}
         </View>
-        <TextInput
-          style={[styles.input, { marginTop: 8 }]}
-          placeholder="Birthdate (YYYY-MM-DD)"
-          keyboardType="numbers-and-punctuation"
-          maxLength={10}
+        {errors.sex ? <Text style={[styles.errorText, { marginTop: 4 }]}>{errors.sex}</Text> : null}
+        <BirthdatePicker
           value={birthdate}
-          onChangeText={setBirthdate}
+          onChange={(v) => { setBirthdate(v); clearErr('birthdate'); }}
+          hasError={!!errors.birthdate}
+          onLayout={at('birthdate')}
         />
-        <TouchableOpacity style={styles.dropdownTrigger} onPress={() => setBarangayModalVisible(true)}>
+        {err('birthdate')}
+        <TouchableOpacity style={[styles.dropdownTrigger, errors.barangay && styles.inputError]} onLayout={at('barangay')} onPress={() => setBarangayModalVisible(true)}>
           <View style={styles.col}>
             <Text style={styles.dropdownName}>{barangay ? `Barangay ${barangay.barangay_name}` : 'Select Barangay'}</Text>
             <Text style={styles.dropdownDesc}>Cordova, Cebu</Text>
           </View>
           <Text style={styles.dropdownArrow}>▼</Text>
         </TouchableOpacity>
+        {err('barangay')}
         <TextInput style={styles.input} placeholder="Sitio / Purok (helps responders find you)" value={sitio} onChangeText={setSitio} />
-        <TextInput style={styles.input} placeholder="Emergency Contact Person" value={emergName} onChangeText={setEmergName} />
-        <TextInput style={styles.input} placeholder="Emergency Contact Number" keyboardType="phone-pad" value={emergContact} onChangeText={setEmergContact} />
+        <TextInput style={inp('emergName')} onLayout={at('emergName')} placeholder="Emergency Contact Person" value={emergName} onChangeText={(v) => { setEmergName(v); clearErr('emergName'); }} />
+        {err('emergName')}
+        <TextInput style={inp('emergContact')} onLayout={at('emergContact')} placeholder="Emergency Contact Number" keyboardType="phone-pad" value={emergContact} onChangeText={(v) => { setEmergContact(v); clearErr('emergContact'); }} />
+        {err('emergContact')}
 
         {/* Housing Tenure & Floor Level */}
         <Text style={styles.miniLabel}>HOUSING OCCUPANCY & TENURE</Text>
@@ -338,10 +367,12 @@ export default function RegisterScreen() {
           </View>
           <Text style={styles.dropdownArrow}>▼</Text>
         </TouchableOpacity>
-        <TextInput style={styles.input} placeholder="Control / Certificate Number" value={idNumber} onChangeText={setIdNumber} />
-        <TouchableOpacity style={styles.btnUpload} onPress={handleIdPhoto}>
+        <TextInput style={inp('idNumber')} onLayout={at('idNumber')} placeholder="Control / Certificate Number" value={idNumber} onChangeText={(v) => { setIdNumber(v); clearErr('idNumber'); }} />
+        {err('idNumber')}
+        <TouchableOpacity style={[styles.btnUpload, errors.idImage && styles.inputError]} onLayout={at('idImage')} onPress={handleIdPhoto}>
           <Text style={styles.btnUploadText}>{idImageUri ? '✅ Valid ID Attached' : '🪪 Upload Photo of Valid ID'}</Text>
         </TouchableOpacity>
+        {err('idImage')}
         {idImageUri && <Image source={{ uri: idImageUri }} style={styles.previewImg} />}
 
         {/* 3. Dynamic Household Members Roster */}
@@ -359,7 +390,7 @@ export default function RegisterScreen() {
         </View>
 
         {members.map((member, index) => (
-          <View key={member.id} style={styles.memberCard}>
+          <View key={member.id} style={[styles.memberCard, errors[`member_${member.id}`] && styles.inputError]} onLayout={at(`member_${member.id}`)}>
             <View style={styles.memberTopRow}>
               <Text style={styles.memberIndex}>FAMILY MEMBER #{index + 2}</Text>
               <TouchableOpacity onPress={() => handleRemoveMember(member.id)}>
@@ -368,11 +399,12 @@ export default function RegisterScreen() {
             </View>
 
             <TextInput
-              style={styles.input}
+              style={inp(`member_${member.id}`)}
               placeholder="Full Name (for Shelter & Missing Manifest)"
               value={member.name}
-              onChangeText={(val) => handleUpdateMember(member.id, 'name', val)}
+              onChangeText={(val) => { handleUpdateMember(member.id, 'name', val); clearErr(`member_${member.id}`); }}
             />
+            {err(`member_${member.id}`)}
             <TextInput
               style={styles.input}
               placeholder="Relationship (e.g., Daughter, Mother)"
@@ -458,8 +490,10 @@ export default function RegisterScreen() {
         {/* 5. Sign-in PIN */}
         <Text style={[styles.sectionHeader, { marginTop: 18 }]}>5. SIGN-IN PIN</Text>
         <Text style={styles.miniLabel}>YOU WILL SIGN IN WITH YOUR CONTACT NUMBER AND THIS PIN</Text>
-        <TextInput style={styles.input} placeholder="6-digit PIN" keyboardType="number-pad" secureTextEntry maxLength={6} value={pin} onChangeText={setPin} />
-        <TextInput style={styles.input} placeholder="Repeat PIN" keyboardType="number-pad" secureTextEntry maxLength={6} value={pinConfirm} onChangeText={setPinConfirm} />
+        <TextInput style={inp('pin')} onLayout={at('pin')} placeholder="6-digit PIN" keyboardType="number-pad" secureTextEntry maxLength={6} value={pin} onChangeText={(v) => { setPin(v); clearErr('pin', 'pinConfirm'); }} />
+        {err('pin')}
+        <TextInput style={inp('pinConfirm')} onLayout={at('pinConfirm')} placeholder="Repeat PIN" keyboardType="number-pad" secureTextEntry maxLength={6} value={pinConfirm} onChangeText={(v) => { setPinConfirm(v); clearErr('pinConfirm'); }} />
+        {err('pinConfirm')}
 
         <TouchableOpacity style={[styles.btnSubmit, submitting && { opacity: 0.7 }]} onPress={handleSubmit} disabled={submitting}>
           {submitting ? <ActivityIndicator color="#FFF" /> : <Text style={styles.btnSubmitText}>Submit Household Registration</Text>}
@@ -498,7 +532,7 @@ export default function RegisterScreen() {
             <ScrollView style={{ maxHeight: 420 }}>
               {barangays.length === 0 && <Text style={styles.optionDesc}>Loading barangays… check your connection.</Text>}
               {barangays.map((b) => (
-                <TouchableOpacity key={b.barangay_id} style={styles.optionRow} onPress={() => { setBarangay(b); setBarangayModalVisible(false); }}>
+                <TouchableOpacity key={b.barangay_id} style={styles.optionRow} onPress={() => { setBarangay(b); clearErr('barangay'); setBarangayModalVisible(false); }}>
                   <Text style={styles.optionTitle}>{b.barangay_name}</Text>
                 </TouchableOpacity>
               ))}
@@ -574,6 +608,8 @@ const styles = StyleSheet.create({
   summaryBar: { backgroundColor: '#F1F5F9', padding: 8, borderRadius: 6, marginBottom: 8, borderWidth: 1, borderColor: '#E2E8F0' },
   summaryText: { fontSize: FONT_SIZES.tiny, fontWeight: FONT_WEIGHTS.extraBold, color: '#1E3A8A', textAlign: 'center' },
 
+  errorText: { color: '#DC2626', fontSize: 12, fontWeight: '700', marginTop: -4, marginBottom: 8 },
+  inputError: { borderColor: '#DC2626', borderWidth: 1.5 },
   memberCard: { backgroundColor: '#FFF', borderWidth: 1, borderColor: '#CBD5E1', borderRadius: 10, padding: 12, marginBottom: 10 },
   memberTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
   memberIndex: { fontSize: FONT_SIZES.tiny, fontWeight: FONT_WEIGHTS.black, color: '#1E3A8A' },
