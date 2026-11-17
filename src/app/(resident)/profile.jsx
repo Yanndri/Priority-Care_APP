@@ -90,8 +90,8 @@ export default function ResidentProfileScreen() {
 
   const handleRecalibrateLocation = () => {
     Alert.alert(
-      'Recalibrate Home GPS 📍',
-      'Select coordinate calibration source:',
+      'Update home location 📍',
+      'Where should we get it from?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -102,19 +102,19 @@ export default function ResidentProfileScreen() {
               const b = list.find((x) => x.barangay_id === profile?.resident?.barangay_id);
               if (!b?.center_lat) throw new Error('This barangay has no centre point yet.');
               setForm((p) => ({ ...p, homeLat: Number(b.center_lat), homeLng: Number(b.center_lng) }));
-              Alert.alert('GPS Calibrated', `Set to the centre of Brgy. ${b.barangay_name}.`);
+              Alert.alert('Location updated', `Set to the centre of Brgy. ${b.barangay_name}.`);
             } catch (e) {
-              Alert.alert('Not calibrated', e.message);
+              Alert.alert('Not updated', e.message);
             }
           },
         },
         {
-          text: 'Capture Live GPS',
+          text: 'Use my phone GPS',
           onPress: async () => {
             const fix = await getCurrentCoords({ precise: true });
             if (!fix) return Alert.alert('No GPS fix', 'Allow location access and try again outdoors or near a window.');
             setForm((p) => ({ ...p, homeLat: fix.lat, homeLng: fix.lng }));
-            Alert.alert('Position Locked 📍', `Calibrated to:\nLat: ${fix.lat.toFixed(5)}, Lng: ${fix.lng.toFixed(5)}`);
+            Alert.alert('Location saved 📍', `Set to:\nLat: ${fix.lat.toFixed(5)}, Lng: ${fix.lng.toFixed(5)}`);
           },
         },
       ]
@@ -196,7 +196,7 @@ export default function ResidentProfileScreen() {
       });
       if (facadeAsset) await setMyHousePhoto(facadeAsset);
       await refresh();
-      Alert.alert('Profile Saved ✅', `Household records updated with MDRRMO Cordova.\n• Members: ${form.members.length}`);
+      Alert.alert('Profile saved ✅', `Household updated.\n• Members: ${form.members.length}`);
       return true;
     } catch (e) {
       Alert.alert('Not saved', e.message);
@@ -206,7 +206,7 @@ export default function ResidentProfileScreen() {
     }
   };
 
-  const handleLogout = () => Alert.alert('Log Out?', 'Exit household portal?', [
+  const handleLogout = () => Alert.alert('Log Out?', 'Sign out of this phone?', [
     { text: 'Cancel', style: 'cancel' },
     {
       text: 'Log Out',
@@ -228,7 +228,18 @@ export default function ResidentProfileScreen() {
             <Text style={styles.headerTitle}>Household Profile</Text>
             {profile?.is_verified
               ? <View style={styles.badgeVerified}><Text style={styles.badgeVerifiedText}>✓ VERIFIED</Text></View>
-              : <View style={[styles.badgeVerified, { backgroundColor: '#FEF3C7' }]}><Text style={[styles.badgeVerifiedText, { color: '#B45309' }]}>PENDING</Text></View>}
+              : (
+                <TouchableOpacity
+                  style={[styles.badgeVerified, { backgroundColor: '#FEF3C7' }]}
+                  accessibilityRole="button"
+                  onPress={() => Alert.alert(
+      'Get verified at your barangay hall 🪪',
+      'Bring a valid ID to your barangay hall. Until your account is verified:\n\n• You can still send an SOS at any time.\n• You can have 1 hazard report waiting to be checked (3 when verified).\n• Your "I see it too" does not raise a hazard\'s alarm level.',
+                  )}
+                >
+                  <Text style={[styles.badgeVerifiedText, { color: '#B45309' }]}>NOT VERIFIED YET ⓘ</Text>
+                </TouchableOpacity>
+              )}
           </View>
           <Text style={styles.headerSub}>Brgy. {form.barangay}{form.sitio ? ` • ${form.sitio}` : ''}</Text>
         </View>
@@ -240,7 +251,7 @@ export default function ResidentProfileScreen() {
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         {/* 1. Residence & Contact Details */}
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>1. RESIDENCE & CONTACT DETAILS</Text>
+          <Text style={styles.sectionTitle}>1. HOME & CONTACT</Text>
           <Text style={styles.fieldLabel}>HEAD OF HOUSEHOLD NAME</Text>
           <TextInput style={[styles.input, styles.inputLocked]} value={form.repName} editable={false} />
 
@@ -266,25 +277,25 @@ export default function ResidentProfileScreen() {
             </View>
           </View>
 
-          {/* Repeatable Home Rooftop Geotag Calibration */}
-          <Text style={styles.fieldLabel}>ROOFTOP EXTRACTION COORDINATES</Text>
+          {/* Home location */}
+          <Text style={styles.fieldLabel}>HOME LOCATION</Text>
           <View style={styles.geoBox}>
             <View style={styles.col}>
               <Text style={styles.geoVal}>
-                📍 {form.homeLat ? `${form.homeLat.toFixed(5)}, ${form.homeLng.toFixed(5)}` : 'Uncalibrated'}
+                📍 {form.homeLat ? `${form.homeLat.toFixed(5)}, ${form.homeLng.toFixed(5)}` : 'Not set'}
               </Text>
-              <Text style={styles.geoSub}>Recalibrate if GPS shifted or you moved structures.</Text>
+              <Text style={styles.geoSub}>Update it if the pin is wrong or you moved.</Text>
             </View>
             <TouchableOpacity style={styles.btnCalibrate} onPress={handleRecalibrateLocation}>
-              <Text style={styles.btnCalibrateText}>🔄 Recalibrate</Text>
+              <Text style={styles.btnCalibrateText}>🔄 Update</Text>
             </TouchableOpacity>
           </View>
           <TouchableOpacity style={styles.btnUseLocation} onPress={() => setPickerOpen(true)}>
             <Text style={styles.btnUseLocationText}>📍 Use My Current Location</Text>
           </TouchableOpacity>
 
-          {/* Micro-Navigation Landmark Description */}
-          <Text style={styles.fieldLabel}>LANDMARK / MICRO-NAVIGATION</Text>
+          {/* Landmark */}
+          <Text style={styles.fieldLabel}>LANDMARK</Text>
           <TextInput
             style={styles.input}
             placeholder="e.g., Blue gate across Aling Nena Store"
@@ -293,7 +304,7 @@ export default function ResidentProfileScreen() {
           />
 
           {/* Facade Strip with Tap-To-View */}
-          <Text style={[styles.fieldLabel, { marginTop: 6 }]}>GEOTAGGED HOUSE FACADE PHOTO</Text>
+          <Text style={[styles.fieldLabel, { marginTop: 6 }]}>PHOTO OF YOUR HOUSE</Text>
           <View style={styles.facadeBox}>
             <TouchableOpacity onPress={() => form.facadeUri && setShowPreview(true)} activeOpacity={0.8}>
               {form.facadeUri
@@ -303,7 +314,7 @@ export default function ResidentProfileScreen() {
             </TouchableOpacity>
 
             <View style={styles.col}>
-              <Text style={styles.facadeTitle}>Visual Structure Landmark</Text>
+              <Text style={styles.facadeTitle}>Helps responders find your house</Text>
               <Text style={styles.facadeDesc}>Tap photo to preview in full screen.</Text>
               <View style={styles.row}>
                 <TouchableOpacity style={styles.btnMedia} onPress={handleCamera}>
@@ -320,7 +331,7 @@ export default function ResidentProfileScreen() {
         {/* 2. Registered Members Roster */}
         <View style={styles.card}>
           <View style={styles.rowBetween}>
-            <Text style={styles.sectionTitle}>2. HOUSEHOLD ROSTER ({form.members.length} SOULS)</Text>
+            <Text style={styles.sectionTitle}>2. HOUSEHOLD ROSTER ({form.members.length} PEOPLE)</Text>
             <TouchableOpacity style={styles.btnAdd} onPress={() => setDraft({ name: '', relationship: '', category: 'child', mobility: 'ambulatory' })}>
               <Text style={styles.btnAddText}>+ Add Member</Text>
             </TouchableOpacity>
@@ -370,7 +381,7 @@ export default function ResidentProfileScreen() {
       <Modal visible={showPreview} transparent animationType="fade">
         <View style={styles.fullscreenBg}>
           <View style={styles.fullscreenHeader}>
-            <Text style={styles.fullscreenTitle}>House Facade Landmark</Text>
+            <Text style={styles.fullscreenTitle}>Your house</Text>
             <TouchableOpacity style={styles.btnClosePreview} onPress={() => setShowPreview(false)}>
               <Text style={styles.btnClosePreviewText}>✕ Close</Text>
             </TouchableOpacity>

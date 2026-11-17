@@ -33,14 +33,16 @@ export function getVPIPriority(score = 0) {
   return 'LOW';
 }
 
+// Same equipment names as the web's fixed list (web src/utils/equipmentMatch.ts).
+// Used when a household has no ticket yet; a ticket's own equipment list wins.
 export function determineRequiredGear({ nonAmbulatoryCount = 0, semiCount = 0, pregnantCount = 0, childrenCount = 0 } = {}) {
   const gear = [];
-  if (parseInt(nonAmbulatoryCount, 10) > 0) gear.push('Long Spine Board (LSB) + 4-Man Team');
-  else if (parseInt(semiCount, 10) > 0) gear.push('Transit Wheelchair');
-  else gear.push('Standard Guided Escort');
+  if (parseInt(nonAmbulatoryCount, 10) > 0) gear.push('Stretcher / spine board (4 people)');
+  else if (parseInt(semiCount, 10) > 0) gear.push('Wheelchair');
+  else gear.push('No special equipment');
 
-  if (parseInt(pregnantCount, 10) > 0) gear.push('Maternal Emergency Pack');
-  if (parseInt(childrenCount, 10) > 0) gear.push('Child Float Vest');
+  if (parseInt(pregnantCount, 10) > 0) gear.push('First aid / maternity kit');
+  if (parseInt(childrenCount, 10) > 0) gear.push('Child life vest');
   return gear.join(' • ');
 }
 

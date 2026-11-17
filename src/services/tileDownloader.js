@@ -1,121 +1,64 @@
+// The offline map: one download of all of Cordova's map tiles (zoom 13 to 16, about
+// 700 tiles, roughly 10 MB) into the phone's storage. The map uses them when there
+// is no signal. Started and removed from the responder's Profile screen.
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Directory, File, Paths } from 'expo-file-system';
 
-// Slippy Map math helpers
-export function lon2tile(lon, zoom) {
-  return Math.floor(((lon + 180) / 360) * Math.pow(2, zoom));
-}
+const INFO_KEY = 'pc.offlineMap.v1'; // { savedAt, tiles }
+const BOUNDS = { minLat: 10.175, maxLat: 10.295, minLon: 123.895, maxLon: 124.02 }; // same as the map limits
+const ZOOMS = [13, 14, 15, 16];
+const BATCH = 6;
 
-export function lat2tile(lat, zoom) {
-  const rad = (lat * Math.PI) / 180;
-  return Math.floor(
-    ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * Math.pow(2, zoom)
-  );
-}
-
-// Bounding box for Cordova, Cebu
-export const CORDOVA_BOUNDS = {
-  minLat: 10.2300,
-  maxLat: 10.2750,
-  minLon: 123.9300,
-  maxLon: 123.9700,
+const lon2tile = (lon, z) => Math.floor(((lon + 180) / 360) * 2 ** z);
+const lat2tile = (lat, z) => {
+  const r = (lat * Math.PI) / 180;
+  return Math.floor(((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * 2 ** z);
 };
 
-// Check if cached tiles directory exists
-export function checkTilesExist() {
-  const tilesDir = new Directory(Paths.document, 'tiles');
-  return tilesDir.exists;
+function cordovaTiles() {
+  const tiles = [];
+  ZOOMS.forEach((z) => {
+    for (let x = lon2tile(BOUNDS.minLon, z); x <= lon2tile(BOUNDS.maxLon, z); x++) {
+      for (let y = lat2tile(BOUNDS.maxLat, z); y <= lat2tile(BOUNDS.minLat, z); y++) tiles.push({ z, x, y });
+    }
+  });
+  return tiles;
 }
 
-// Shared core download engine
-async function downloadTileBatch(tilesToDownload, onProgress = () => {}) {
-  const total = tilesToDownload.length;
-  if (total === 0) {
-    onProgress(100, 0, 0);
-    return true;
-  }
+// null when nothing is saved yet.
+export async function getOfflineMapInfo() {
+  try { return JSON.parse((await AsyncStorage.getItem(INFO_KEY)) || 'null'); } catch { return null; }
+}
 
-  let completed = 0;
-  const BATCH_SIZE = 6;
-
-  async function downloadTile(tile) {
-    const { z, x, y } = tile;
-    const dir = new Directory(Paths.document, 'tiles', String(z), String(x));
-    const localFile = new File(dir, `${y}.png`);
-
+// onProgress(done, total). Tiles already saved are skipped, so it doubles as "Update".
+export async function downloadCordovaMap(onProgress = () => {}) {
+  const tiles = cordovaTiles();
+  let done = 0;
+  let saved = 0;
+  const getTile = async ({ z, x, y }) => {
     try {
-      if (!dir.exists) {
-        dir.create({ intermediates: true });
-      }
-
-      if (!localFile.exists) {
-        const remoteUrl = `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
-        await File.downloadFileAsync(remoteUrl, localFile, {
-          headers: {
-            'User-Agent': 'PriorityCare-LGU-DisasterApp/1.0',
-          },
+      const dir = new Directory(Paths.document, 'tiles', String(z), String(x));
+      if (!dir.exists) dir.create({ intermediates: true, idempotent: true });
+      const file = new File(dir, `${y}.png`);
+      if (!file.exists) {
+        await File.downloadFileAsync(`https://tile.openstreetmap.org/${z}/${x}/${y}.png`, file, {
+          idempotent: true,
+          headers: { 'User-Agent': 'PriorityCare-Cordova/1.0' },
         });
       }
-    } catch (e) {
-      console.warn(`Tile download error ${z}/${x}/${y}:`, e);
-    } finally {
-      completed++;
-      onProgress(Math.round((completed / total) * 100), completed, total);
-    }
-  }
-
-  for (let i = 0; i < tilesToDownload.length; i += BATCH_SIZE) {
-    const batch = tilesToDownload.slice(i, i + BATCH_SIZE);
-    await Promise.all(batch.map((t) => downloadTile(t)));
-  }
-
-  return true;
+      saved++;
+    } catch { /* one failed tile does not stop the rest */ }
+    done++;
+    onProgress(done, tiles.length);
+  };
+  for (let i = 0; i < tiles.length; i += BATCH) await Promise.all(tiles.slice(i, i + BATCH).map(getTile));
+  const info = { savedAt: new Date().toISOString(), tiles: saved, total: tiles.length };
+  await AsyncStorage.setItem(INFO_KEY, JSON.stringify(info));
+  return info;
 }
 
-/**
- * Downloads alleyway-level tiles (Zooms 14-17) for a specific clicked barangay
- * @param {Object} bounds { minLat, maxLat, minLon, maxLon }
- * @param {Function} onProgress callback (percentage, completed, total)
- */
-export async function downloadBarangayTiles(bounds, onProgress = () => {}) {
-  const minZoom = 14;
-  const maxZoom = 17; // Street and alleyway tactical level
-  const tilesToDownload = [];
-
-  for (let z = minZoom; z <= maxZoom; z++) {
-    const leftX = lon2tile(bounds.minLon, z);
-    const rightX = lon2tile(bounds.maxLon, z);
-    const topY = lat2tile(bounds.maxLat, z);
-    const bottomY = lat2tile(bounds.minLat, z);
-
-    for (let x = Math.min(leftX, rightX); x <= Math.max(leftX, rightX); x++) {
-      for (let y = Math.min(topY, bottomY); y <= Math.max(topY, bottomY); y++) {
-        tilesToDownload.push({ z, x, y });
-      }
-    }
-  }
-
-  return await downloadTileBatch(tilesToDownload, onProgress);
-}
-
-// Full municipal tile downloader (Zooms 13-15 overview)
-export async function downloadCordovaTiles(onProgress = () => {}) {
-  const bounds = CORDOVA_BOUNDS;
-  const minZoom = 13;
-  const maxZoom = 15;
-  const tilesToDownload = [];
-
-  for (let z = minZoom; z <= maxZoom; z++) {
-    const leftX = lon2tile(bounds.minLon, z);
-    const rightX = lon2tile(bounds.maxLon, z);
-    const topY = lat2tile(bounds.maxLat, z);
-    const bottomY = lat2tile(bounds.minLat, z);
-
-    for (let x = leftX; x <= rightX; x++) {
-      for (let y = topY; y <= bottomY; y++) {
-        tilesToDownload.push({ z, x, y });
-      }
-    }
-  }
-
-  return await downloadTileBatch(tilesToDownload, onProgress);
+export async function removeOfflineMap() {
+  const dir = new Directory(Paths.document, 'tiles');
+  if (dir.exists) dir.delete();
+  await AsyncStorage.removeItem(INFO_KEY);
 }

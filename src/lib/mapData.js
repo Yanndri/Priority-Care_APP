@@ -17,6 +17,7 @@ export const toMapHazard = (h) => ({
   photoPath: h.photo_path,
   reviewNote: h.review_note,
   createdAt: h.created_at,
+  eventId: h.event_id || null, // set when the report is part of a declared disaster (STEP21)
 });
 
 export const toMapShelter = (c) => ({

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Modal, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Modal, ActivityIndicator, RefreshControl, TextInput } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import BottomNav from '../../components/BottomNav';
@@ -11,6 +11,7 @@ import {
   getMyPreemptive, personBadge, MOBILITY_LABELS,
 } from '../../services/api';
 import DisasterBanner from '../../components/DisasterBanner';
+import AtCentreCard from '../../components/AtCentreCard';
 import { useMyRescue, RescueStatusCard } from '../../components/RescueWatcher';
 import { getCurrentCoords, distanceMeters, formatDistance, shelterLoad } from '../../lib/location';
 
@@ -23,6 +24,15 @@ const clock = (iso) => {
 // Last loaded data, kept while the app runs. Switching tabs from another screen remounts this
 // screen; starting from the cached state stops the "no emergency" view flashing before the reload.
 let cache = { uid: null };
+
+// Quick taps for a panicking resident, matched to the emergency (the type itself is already sent).
+// Situations only, no illnesses (scope rule).
+const NOTE_HINTS = {
+  FLOOD: ['Water above the knee', 'Water above the waist', 'We are on the roof', 'Someone cannot walk', 'Children with us', 'Senior with us'],
+  FIRE: ['Fire is spreading', 'Smoke inside the house', 'Someone has burns', 'Someone cannot walk', 'Children with us', 'Senior with us'],
+  MEDICAL: ['Unconscious', 'Heavy bleeding', 'Hard to breathe', 'In labor', 'Cannot walk', 'Senior'],
+  TRAPPED: ['Under debris', 'Door or way out blocked', 'Someone is injured', 'Someone cannot walk', 'Children with us', 'Senior with us'],
+};
 
 export default function ResidentDashboard() {
   const insets = useSafeAreaInsets();
@@ -43,6 +53,14 @@ export default function ResidentDashboard() {
   const [sos, setSos] = useState(cached?.sos ?? null);
   const [loaded, setLoaded] = useState(Boolean(cached));
   const [selectedEmergency, setSelectedEmergency] = useState(EMERGENCY_TYPES[0]);
+  // Optional note so the MDRRMO knows what to bring (water level, who can't walk, injuries).
+  // Optional details, asked on the confirm sheet after SEND SOS (tap chips and/or type).
+  const [sosNote, setSosNote] = useState('');
+  const [sosChips, setSosChips] = useState([]);
+  const [confirmVisible, setConfirmVisible] = useState(false);
+  const [sosWith, setSosWith] = useState([]); // member_ids of household members with the resident
+  const [sosOthers, setSosOthers] = useState(0); // people with them who are not in the household
+  const toggleChip = (h) => setSosChips((c) => (c.includes(h) ? c.filter((x) => x !== h) : [...c, h]));
   const [cancelModalVisible, setCancelModalVisible] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -101,25 +119,25 @@ export default function ResidentDashboard() {
   const sosActive = sos?.status === 'active';
   const sosType = EMERGENCY_TYPES.find((t) => t.id === sos?.alert_type) || selectedEmergency;
 
-  const handleTriggerSOS = () => {
-    Alert.alert(`Broadcast ${selectedEmergency.label} SOS?`, `Your location and ${people.length || 1} household member(s) will be sent to the MDRRMO.`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'CONFIRM SOS',
-        onPress: async () => {
-          setBusy(true);
-          try {
-            const coords = await getCurrentCoords({ precise: true });
-            setSos(await raiseSos(selectedEmergency.id, coords));
-            if (!coords) Alert.alert('SOS sent', 'Location was not available, so your registered home location was sent instead.');
-          } catch (e) {
-            Alert.alert('SOS not sent', `${e.message}\n\nIf you cannot get through, call the MDRRMO hotline.`);
-          } finally {
-            setBusy(false);
-          }
-        },
-      },
-    ]);
+  const householdMembers = people.filter((p) => p.member_id);
+  const sosTotal = 1 + sosWith.length + sosOthers;
+  const handleTriggerSOS = () => { setSosWith(householdMembers.filter((m) => !m.missing).map((m) => m.member_id)); setSosOthers(0); setConfirmVisible(true); };
+
+  const sendSos = async () => {
+    setConfirmVisible(false);
+    setBusy(true);
+    try {
+      const note = [...sosChips, sosNote.trim()].filter(Boolean).join(', ');
+      const coords = await getCurrentCoords({ precise: true });
+      setSos(await raiseSos(selectedEmergency.id, coords, note, { headcount: sosTotal, withMembers: sosWith }));
+      setSosNote('');
+      setSosChips([]);
+      if (!coords) Alert.alert('SOS sent', 'Location was not available, so your registered home location was sent instead.');
+    } catch (e) {
+      Alert.alert('SOS not sent', `${e.message}\n\nIf you cannot get through, call the MDRRMO hotline.`);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const handleConfirmCancelSOS = async (reason) => {
@@ -127,7 +145,7 @@ export default function ResidentDashboard() {
     setBusy(true);
     try {
       setSos(await cancelSos(reason));
-      Alert.alert('Distress Call Cancelled ✅', 'MDRRMO responders have been told your household no longer needs rescue.');
+      Alert.alert('SOS cancelled ✅', 'The responders were told your household no longer needs rescue.');
     } catch (e) {
       Alert.alert('Could not cancel', e.message);
     } finally {
@@ -138,7 +156,7 @@ export default function ResidentDashboard() {
   const handleToggleMissing = (person) => {
     if (person.kind !== 'member') return;
     const isMissing = person.missing;
-    Alert.alert(isMissing ? 'Mark Safe?' : 'Report Missing?', `Update status for ${person.name} on the municipal register?`, [
+    Alert.alert(isMissing ? 'Mark Safe?' : 'Report Missing?', `Tell the MDRRMO about ${person.name}?`, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: isMissing ? 'Mark Safe' : 'Flag Missing',
@@ -175,18 +193,30 @@ export default function ResidentDashboard() {
       {/* Top Header */}
       <View style={styles.topHeader}>
         <View>
-          <Text style={styles.headerSub}>HOUSEHOLD EMERGENCY PORTAL</Text>
+          <Text style={styles.headerSub}>MY HOUSEHOLD</Text>
           <Text style={styles.headerTitle}>{fullName || 'Resident'}</Text>
         </View>
-        <View style={[styles.badgeVerified, !profile?.is_verified && styles.badgePending]}>
+        <TouchableOpacity
+          style={[styles.badgeVerified, !profile?.is_verified && styles.badgePending]}
+          disabled={Boolean(profile?.is_verified)}
+          accessibilityRole="button"
+          onPress={() => Alert.alert(
+      'Get verified at your barangay hall 🪪',
+      'Bring a valid ID to your barangay hall. Until your account is verified:\n\n• You can still send an SOS at any time.\n• You can have 1 hazard report waiting to be checked (3 when verified).\n• Your "I see it too" does not raise a hazard\'s alarm level.',
+          )}
+        >
           <Text style={[styles.badgeVerifiedText, !profile?.is_verified && { color: '#B45309' }]}>
-            {profile?.is_verified ? '✓ VERIFIED' : 'PENDING VERIFICATION'}
+            {profile?.is_verified ? '✓ VERIFIED' : 'NOT VERIFIED YET ⓘ'}
           </Text>
-        </View>
+        </TouchableOpacity>
       </View>
 
       {/* Active disaster declarations for the resident's barangay (live from the web console) */}
-      <DisasterBanner events={events} />
+      <DisasterBanner compact events={events} style={{ marginHorizontal: 14, marginTop: 8 }} />
+
+      {/* Who in the household is at an evacuation centre, with Check out */}
+      <AtCentreCard people={people} profileUid={profile?.uid} activeDisasters={events} onDone={load}
+        style={{ marginHorizontal: 14, marginTop: 8 }} />
 
       {/* Sync Status Strip */}
       <View style={[styles.syncStrip, isOffline ? styles.bgOffline : styles.bgOnline]}>
@@ -216,11 +246,6 @@ export default function ResidentDashboard() {
                 {isDisplaced ? `Away from home (${formatDistance(distFromHome)})` : suggested ? formatDistance(suggested.distance) : ' '}
               </Text>
             </View>
-            <View style={styles.vDivider} />
-            <TouchableOpacity style={styles.summaryCol} onPress={() => router.push('/(resident)/evac-map')}>
-              <Text style={styles.label}>ROUTE MAP</Text>
-              <Text style={[styles.sub, { color: '#2563EB', fontWeight: FONT_WEIGHTS.extraBold }]}>View Path →</Text>
-            </TouchableOpacity>
           </View>
 
           <TouchableOpacity
@@ -250,13 +275,13 @@ export default function ResidentDashboard() {
               )}
               {/* Emergency Selector Grid */}
               <View style={[styles.card, { marginTop: 10 }]}>
-                <Text style={styles.label}>1. SELECT EMERGENCY TYPE</Text>
+                <Text style={styles.label}>1. WHAT IS THE EMERGENCY?</Text>
                 <View style={styles.grid}>
                   {EMERGENCY_TYPES.map((t) => (
                     <TouchableOpacity
                       key={t.id}
                       style={[styles.pill, selectedEmergency.id === t.id && styles.pillActive]}
-                      onPress={() => setSelectedEmergency(t)}
+                      onPress={() => { setSelectedEmergency(t); setSosChips([]); }}
                     >
                       <Text style={{ fontSize: 14 }}>{t.icon}</Text>
                       <Text style={[styles.pillText, selectedEmergency.id === t.id && styles.pillTextActive]}>{t.label}</Text>
@@ -271,12 +296,12 @@ export default function ResidentDashboard() {
                   {busy ? <ActivityIndicator color="#FFF" size="large" /> : (
                     <>
                       <Text style={styles.sosIcon}>{selectedEmergency.icon}</Text>
-                      <Text style={styles.sosLabel}>BROADCAST SOS</Text>
+                      <Text style={styles.sosLabel}>SEND SOS</Text>
                       <Text style={styles.sosSub}>{selectedEmergency.label}</Text>
                     </>
                   )}
                 </TouchableOpacity>
-                <Text style={styles.sub}>Sends your location & household needs to the MDRRMO</Text>
+                <Text style={styles.sub}>Sends your location and household details to the MDRRMO</Text>
               </View>
             </>
           ) : (
@@ -284,11 +309,12 @@ export default function ResidentDashboard() {
             <View style={[styles.activeSosCard, { marginTop: 10 }]}>
               <Text style={styles.activeSosTitle}>⚠️ {sosType.icon} {sosType.label.toUpperCase()} ACTIVE</Text>
               <Text style={styles.activeSosSub}>
-                Broadcasted at {clock(sos.created_at)} • {sos.headcount} person(s) • Priority level {sos.alert_level}
+                Sent at {clock(sos.created_at)} • {sos.headcount} person(s) • Priority level {sos.alert_level}
               </Text>
+              {sos.note ? <Text style={styles.activeSosSub}>📝 Your note: {sos.note}</Text> : null}
 
               <View style={styles.trackerBox}>
-                <Text style={styles.stepDone}>✓ 1. Distress logged & sent to the MDRRMO</Text>
+                <Text style={styles.stepDone}>✓ 1. SOS sent to the MDRRMO</Text>
                 <Text style={sos.ticket ? styles.stepDone : styles.stepActive}>
                   {sos.ticket ? `✓ 2. ${sos.ticket.unit_name || 'Rescue team'} assigned (${sos.ticket.status.replace('_', ' ')})` : '● 2. Waiting for a rescue team to be assigned'}
                 </Text>
@@ -304,9 +330,9 @@ export default function ResidentDashboard() {
                 <TouchableOpacity style={styles.btnPrimary} onPress={() => router.push('/(resident)/evac-map')}>
                   <Text style={styles.btnPrimaryText}>🗺️ View Map</Text>
                 </TouchableOpacity>
-                {/* Cancel Distress / Self-Evacuation Button (Module 5.3) */}
+                {/* Cancel SOS button */}
                 <TouchableOpacity style={styles.btnCancelDistress} onPress={() => setCancelModalVisible(true)} disabled={busy}>
-                  <Text style={styles.btnCancelDistressText}>✕ Cancel SOS / Self-Evacuated</Text>
+                  <Text style={styles.btnCancelDistressText}>✕ Cancel SOS / We left on our own</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -321,13 +347,13 @@ export default function ResidentDashboard() {
         >
           <View style={[styles.card, { backgroundColor: isDisplaced ? '#FFFBEB' : '#EFF6FF', borderColor: isDisplaced ? '#FDE68A' : '#BFDBFE' }]}>
             <Text style={[styles.label, { color: isDisplaced ? '#B45309' : '#1E3A8A' }]}>
-              {isDisplaced ? '🏃 AWAY FROM HOME NOTICE' : designated ? "★ YOUR BARANGAY'S DESIGNATED SHELTER" : '🏠 NEAREST OPEN SHELTER TO YOUR HOME'}
+              {isDisplaced ? '🏃 YOU ARE AWAY FROM HOME' : designated ? "★ YOUR BARANGAY'S SHELTER" : '🏠 NEAREST OPEN SHELTER TO YOUR HOME'}
             </Text>
             <Text style={[styles.val, { fontSize: 13 }]}>
               {!suggested
                 ? 'No evacuation centre is open right now.'
                 : isDisplaced
-                  ? `You are ${formatDistance(distFromHome)} from home. Proceed to the nearest shelter: ${suggested.center_name}`
+                  ? `You are ${formatDistance(distFromHome)} from home. The nearest shelter is ${suggested.center_name}`
                   : `${suggested.center_name} (${formatDistance(suggested.distance)})`}
             </Text>
           </View>
@@ -335,7 +361,7 @@ export default function ResidentDashboard() {
           {/* Household Roster */}
           <View style={styles.card}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-              <Text style={styles.label}>HOUSEHOLD ROSTER (TAP TO FLAG MISSING)</Text>
+              <Text style={styles.label}>HOUSEHOLD MEMBERS (TAP TO REPORT MISSING)</Text>
               <TouchableOpacity onPress={() => router.push('/(resident)/profile')}>
                 <Text style={{ color: '#1E3A8A', fontWeight: FONT_WEIGHTS.extraBold, fontSize: FONT_SIZES.caption }}>+ Edit</Text>
               </TouchableOpacity>
@@ -388,34 +414,96 @@ export default function ResidentDashboard() {
         </ScrollView>
       )}
 
-      {/* Cancel Distress / Self-Evacuation Dialog Modal (Module 5.3) */}
+      {/* Cancel SOS dialog */}
+      {/* Confirm SOS: optional details for the MDRRMO and responders, then send */}
+      <Modal visible={confirmVisible} transparent animationType="slide" onRequestClose={() => setConfirmVisible(false)}>
+        <View style={styles.sheetBg}>
+          <ScrollView style={styles.sheet} contentContainerStyle={{ paddingBottom: 28 }}>
+            <Text style={styles.sheetTitle}>{selectedEmergency.icon} Send {selectedEmergency.label} SOS?</Text>
+            <Text style={styles.sheetSub}>Your location will be sent to the MDRRMO.</Text>
+            <Text style={[styles.label, { marginTop: 12 }]}>WHO IS WITH YOU RIGHT NOW?</Text>
+            {householdMembers.length > 0 && <Text style={styles.sheetSub}>Untick anyone in your household who is not with you.</Text>}
+            {householdMembers.map((m) => {
+              const on = sosWith.includes(m.member_id);
+              return (
+                <TouchableOpacity key={m.member_id} style={styles.withRow} accessibilityRole="checkbox" accessibilityState={{ checked: on }}
+                  onPress={() => setSosWith((w) => (on ? w.filter((x) => x !== m.member_id) : [...w, m.member_id]))}>
+                  <Text style={styles.withTick}>{on ? '☑' : '☐'}</Text>
+                  <Text style={styles.withName}>{m.name}{m.relationship ? ` (${m.relationship})` : ''}</Text>
+                </TouchableOpacity>
+              );
+            })}
+            <Text style={[styles.sheetSub, { marginTop: 8 }]}>Others with you (not in your household)</Text>
+            <View style={styles.counterRow}>
+              <TouchableOpacity style={styles.counterBtn} onPress={() => setSosOthers((n) => Math.max(0, n - 1))}
+                accessibilityRole="button" accessibilityLabel="One less person">
+                <Text style={styles.counterBtnText}>−</Text>
+              </TouchableOpacity>
+              <Text style={styles.counterValue} accessibilityLiveRegion="polite">{sosOthers}</Text>
+              <TouchableOpacity style={styles.counterBtn} onPress={() => setSosOthers((n) => Math.min(49 - sosWith.length, n + 1))}
+                accessibilityRole="button" accessibilityLabel="One more person">
+                <Text style={styles.counterBtnText}>+</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.withTotal}>{sosTotal} {sosTotal === 1 ? 'person' : 'people'} in total, including you</Text>
+            <Text style={[styles.label, { marginTop: 12 }]}>ANYTHING THE RESPONDERS SHOULD KNOW? (OPTIONAL)</Text>
+            <View style={styles.hintRow}>
+              {(NOTE_HINTS[selectedEmergency.id] || []).map((h) => {
+                const on = sosChips.includes(h);
+                return (
+                  <TouchableOpacity key={h} style={[styles.hintChip, on && styles.hintChipOn]} onPress={() => toggleChip(h)}
+                    accessibilityRole="checkbox" accessibilityState={{ checked: on }}>
+                    <Text style={[styles.hintText, on && styles.hintTextOn]}>{on ? '✓ ' : ''}{h}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            <TextInput
+              style={styles.noteInput}
+              value={sosNote}
+              onChangeText={setSosNote}
+              placeholder="Other details (e.g. water is waist deep)"
+              placeholderTextColor="#94A3B8"
+              multiline
+              maxLength={400}
+            />
+            <TouchableOpacity style={styles.sheetSend} onPress={sendSos} accessibilityRole="button">
+              <Text style={styles.sheetSendText}>SEND SOS NOW</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.sheetCancel} onPress={() => setConfirmVisible(false)}>
+              <Text style={styles.sheetCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </View>
+      </Modal>
+
       <Modal visible={cancelModalVisible} transparent animationType="fade">
         <View style={styles.modalBg}>
           <View style={styles.dialog}>
-            <Text style={styles.dialogTitle}>CANCEL ACTIVE SOS DISTRESS?</Text>
+            <Text style={styles.dialogTitle}>CANCEL YOUR SOS?</Text>
             <Text style={styles.dialogSub}>
-              Select resolution reason to officially withdraw your extraction ticket:
+              Why are you cancelling?
             </Text>
 
             <View style={{ gap: 8, marginVertical: 12 }}>
               <TouchableOpacity style={styles.cancelReasonBtn} onPress={() => handleConfirmCancelSOS('self_evacuated')}>
-                <Text style={styles.cancelReasonTitle}>🚶 Safely Self-Evacuated</Text>
-                <Text style={styles.cancelReasonDesc}>Family reached safety or 2nd floor independently.</Text>
+                <Text style={styles.cancelReasonTitle}>🚶 We left on our own</Text>
+                <Text style={styles.cancelReasonDesc}>We reached a safe place or an upper floor.</Text>
               </TouchableOpacity>
 
               <TouchableOpacity style={styles.cancelReasonBtn} onPress={() => handleConfirmCancelSOS('threat_receded')}>
-                <Text style={styles.cancelReasonTitle}>🏡 Threat Receded / Safe at Home</Text>
-                <Text style={styles.cancelReasonDesc}>Water level dropped; emergency assistance no longer required.</Text>
+                <Text style={styles.cancelReasonTitle}>🏡 Safe at home now</Text>
+                <Text style={styles.cancelReasonDesc}>The danger passed; we no longer need help.</Text>
               </TouchableOpacity>
 
               <TouchableOpacity style={styles.cancelReasonBtn} onPress={() => handleConfirmCancelSOS('accidental')}>
-                <Text style={[styles.cancelReasonTitle, { color: '#DC2626' }]}>⚠️ Accidental Trigger</Text>
-                <Text style={styles.cancelReasonDesc}>Cancel without dispatch penalty.</Text>
+                <Text style={[styles.cancelReasonTitle, { color: '#DC2626' }]}>⚠️ Sent by mistake</Text>
+                <Text style={styles.cancelReasonDesc}>Cancel with no penalty.</Text>
               </TouchableOpacity>
             </View>
 
             <TouchableOpacity style={styles.btnKeepSos} onPress={() => setCancelModalVisible(false)}>
-              <Text style={styles.btnKeepSosText}>Keep Distress Call Active</Text>
+              <Text style={styles.btnKeepSosText}>Keep my SOS</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -455,6 +543,28 @@ const styles = StyleSheet.create({
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   pill: { flexDirection: 'row', alignItems: 'center', gap: 5, padding: 8, borderRadius: 6, backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0', width: '48.5%' },
   pillActive: { backgroundColor: '#FEF2F2', borderColor: '#DC2626' },
+  hintRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
+  hintChip: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14, backgroundColor: '#F1F5F9', borderWidth: 1, borderColor: '#E2E8F0' },
+  hintText: { fontSize: 13, fontWeight: '700', color: '#334155' },
+  hintChipOn: { backgroundColor: '#FEE2E2', borderColor: '#DC2626' },
+  hintTextOn: { color: '#B91C1C' },
+  sheetBg: { flex: 1, backgroundColor: 'rgba(15,23,42,0.6)', justifyContent: 'flex-end' },
+  sheet: { backgroundColor: '#FFF', borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 18, flexGrow: 0, maxHeight: '90%' },
+  withRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F1F5F9' },
+  withTick: { fontSize: 22, color: '#B91C1C' },
+  withName: { fontSize: 15, fontWeight: '700', color: '#0F172A', flex: 1 },
+  withTotal: { fontSize: 13, fontWeight: '800', color: '#B91C1C', marginTop: 6 },
+  sheetTitle: { fontSize: 19, fontWeight: '900', color: '#0F172A' },
+  sheetSub: { fontSize: 13, color: '#475569', marginTop: 4 },
+  counterRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginTop: 6 },
+  counterBtn: { width: 44, height: 44, borderRadius: 22, borderWidth: 1, borderColor: '#CBD5E1', backgroundColor: '#F8FAFC', alignItems: 'center', justifyContent: 'center' },
+  counterBtnText: { fontSize: 22, fontWeight: '900', color: '#0F172A' },
+  counterValue: { fontSize: 17, fontWeight: '900', color: '#0F172A', minWidth: 90, textAlign: 'center' },
+  sheetSend: { backgroundColor: '#DC2626', borderRadius: 12, paddingVertical: 15, alignItems: 'center', marginTop: 14 },
+  sheetSendText: { color: '#FFF', fontWeight: '900', fontSize: 17, letterSpacing: 0.5 },
+  sheetCancel: { alignItems: 'center', paddingVertical: 12 },
+  sheetCancelText: { color: '#475569', fontWeight: '800', fontSize: 14 },
+  noteInput: { marginTop: 8, minHeight: 60, borderWidth: 1, borderColor: '#CBD5E1', borderRadius: 8, padding: 10, fontSize: 14, color: '#0F172A', textAlignVertical: 'top', backgroundColor: '#FFF' },
   pillText: { fontSize: FONT_SIZES.caption, fontWeight: FONT_WEIGHTS.bold, color: '#475569' },
   pillTextActive: { color: '#DC2626', fontWeight: FONT_WEIGHTS.extraBold },
   sosWrap: { alignItems: 'center', flex: 1, justifyContent: 'center' },

@@ -1,7 +1,7 @@
 import { Stack } from 'expo-router';
 import { DisasterWatcher } from '../../components/DisasterBanner';
 import { SosWatcher } from '../../components/SosAlarm';
-import { MissionTracker } from '../../components/MissionTracker';
+import NearbyHazardWatcher from '../../components/NearbyHazardWatcher';
 
 export default function RescuerLayout() {
   return (
@@ -10,8 +10,7 @@ export default function RescuerLayout() {
     <DisasterWatcher />
     {/* Siren, vibration and a phone notification when a new SOS comes in. */}
     <SosWatcher />
-    {/* Shares the unit's live GPS during a mission and alerts at 100 m / 10 m / 5 m. */}
-    <MissionTracker />
+    <NearbyHazardWatcher />
     <Stack
       screenOptions={{
         headerShown: false, // Screens manage their own headers

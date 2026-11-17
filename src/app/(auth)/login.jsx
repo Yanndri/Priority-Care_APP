@@ -38,9 +38,9 @@ export default function LoginScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top + 30 }]}>
       <View style={styles.brandBox}>
-        <Text style={styles.badge}>MDRRMO CORDOVA • EDSS</Text>
+        <Text style={styles.badge}>MDRRMO CORDOVA</Text>
         <Text style={styles.title}>PriorityCare</Text>
-        <Text style={styles.sub}>Emergency Triage & Tactical Dispatch System</Text>
+        <Text style={styles.sub}>Disaster rescue and evacuation</Text>
       </View>
 
       <View style={styles.card}>
@@ -52,7 +52,7 @@ export default function LoginScreen() {
               onPress={() => { setRole(r); setError(''); }}
             >
               <Text style={[styles.tabText, role === r && styles.tabTextActive]}>
-                {r === 'resident' ? '🏠 Household' : '🚑 Rescuer MDT'}
+                {r === 'resident' ? '🏠 Household' : '🚑 Responder'}
               </Text>
             </TouchableOpacity>
           ))}
@@ -90,18 +90,18 @@ export default function LoginScreen() {
             <ActivityIndicator color="#FFF" />
           ) : (
             <Text style={styles.btnPrimaryText}>
-              {role === 'resident' ? 'Enter Household Portal' : 'Launch Tactical Terminal'}
+              {role === 'resident' ? 'Sign in' : 'Sign in as responder'}
             </Text>
           )}
         </TouchableOpacity>
 
         {role === 'resident' ? (
           <TouchableOpacity style={styles.btnSecondary} onPress={() => router.push('/(auth)/register')}>
-            <Text style={styles.btnSecondaryText}>New Household? Register Profile →</Text>
+            <Text style={styles.btnSecondaryText}>New household? Register →</Text>
           </TouchableOpacity>
         ) : (
           <Text style={styles.rescuerNote}>
-            🔒 Responder accounts are provisioned exclusively via the MDRRMO EOC Web Console under RA 10121.
+            🔒 Responder accounts are made by the MDRRMO on the website (RA 10121).
           </Text>
         )}
       </View>

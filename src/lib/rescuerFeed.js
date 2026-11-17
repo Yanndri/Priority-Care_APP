@@ -1,8 +1,9 @@
 // Loads get_rescuer_feed and turns it into the incident shape the rescuer
 // screens were built around (one entry per SOS / dispatch ticket).
 import { useCallback, useEffect, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { EMERGENCY_TYPES } from '../constants/mockData';
-import { getRescuerFeed, listBarangays, memberToApp, personBadge, subscribe, onLiveSignal, MOBILITY_LABELS, AGE_GROUP_LABELS } from '../services/api';
+import { getHazardReporters, getUnverifiedResidents, getTicketSosMembers, reporterLabel, getRescuerFeed, listBarangays, memberToApp, personBadge, subscribe, onLiveSignal, MOBILITY_LABELS, AGE_GROUP_LABELS } from '../services/api';
 import { calculateVPI, getVPIPriority, determineRequiredGear } from '../utils/vpi';
 import { toMapHazard, toMapShelter } from './mapData';
 
@@ -55,8 +56,12 @@ function vulnerability(people, houseType) {
 }
 
 function fromTicket(t, myUnitName) {
-  const people = t.resident?.household?.people || [];
-  const v = vulnerability(people, t.resident?.household?.house_type);
+  const everyone = t.resident?.household?.people || [];
+  // Only the household members the resident ticked as with them (STEP30); not given = everyone.
+  const listed = t.sos_with?.listed ? new Set(t.sos_with.member_ids || []) : null;
+  const people = listed ? everyone.filter((p) => p.kind === 'resident' || listed.has(p.member_id)) : everyone;
+  // Away from home, their own house type says nothing about where they are now.
+  const v = vulnerability(people, t.sos?.visiting_from ? null : t.resident?.household?.house_type);
   const level = t.sos?.alert_level;
   const priority = t.priority === 'critical' || level === 3 ? 'CRITICAL'
     : t.priority === 'high' || level === 2 ? 'ASSISTED' : getVPIPriority(v.score);
@@ -68,6 +73,7 @@ function fromTicket(t, myUnitName) {
     ticketNo: t.ticket_no,
     isMine: true,
     name: t.resident?.name || t.subject,
+    residentUid: t.resident?.uid || null,
     contact: t.resident?.contact_no || '',
     contact2: '',
     barangay: t.barangay_name,
@@ -125,7 +131,7 @@ function fromAlert(a, barangayNames) {
     householdSize: a.headcount,
     members: [],
     landmark: '',
-    requiredGear: 'Awaiting dispatch from the MDRRMO',
+    requiredGear: 'Waiting for the MDRRMO to assign a unit',
     status: 'QUEUED',
     sosActive: true,
     verificationStatus: a.ticket_status ? 'CONFIRMED' : 'UNVERIFIED',
@@ -135,44 +141,86 @@ function fromAlert(a, barangayNames) {
   };
 }
 
+const FEED_CACHE_KEY = 'pc.rescuerFeed.v1';
+
+async function readCachedFeed() {
+  try {
+    const raw = await AsyncStorage.getItem(FEED_CACHE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Turns the raw feed into what the screens use (the same for live and saved data).
+function buildState(feed, barangays, reporters, savedAt, fromCache, unverifiedUids = []) {
+  const unverified = new Set(unverifiedUids);
+  const barangayNames = Object.fromEntries((barangays || []).map((b) => [b.barangay_id, b.barangay_name]));
+  const who = reporters || {};
+  const myUnitName = (feed.me?.units || []).map((u) => u.unit_name).join(', ') || 'My Unit';
+  const mine = (feed.tickets || []).map((t) => fromTicket(t, myUnitName));
+  const taken = new Set(mine.map((m) => m.lat_lng_key));
+  const others = (feed.active_sos || []).filter((a) => !taken.has(`${a.created_at}|${a.alert_type}`))
+    .map((a) => fromAlert(a, barangayNames));
+  return {
+    loading: false,
+    error: null,
+    me: { ...feed.me, unitLabel: myUnitName },
+    // Unverified account (STEP26 trust level): details are self-reported, so the sheet says so.
+    incidents: [...mine, ...others].map((i) => ({ ...i, accountUnverified: Boolean(i.residentUid && unverified.has(i.residentUid)) })),
+    hazards: (feed.hazards || []).map((h) => ({
+      ...toMapHazard(h),
+      barangay: barangayNames[h.barangay_id] || '',
+      reportedBy: reporterLabel(h.reporter_role, who[h.hazard_id]),
+      reporterContact: who[h.hazard_id]?.contact_no || null,
+      time: timeAgo(h.created_at),
+      clearanceRequested: h.status === 'under_review' && /^cleared/i.test(h.review_note || ''),
+    })).map((h) => ({
+      ...h,
+      // Under review = needs checking again, unless it is a clearance report waiting on the EOC.
+      verificationStatus: h.clearanceRequested ? 'CONFIRMED' : h.status === 'under_review' ? 'UNVERIFIED' : h.verificationStatus,
+    })),
+    centers: (feed.centers || []).map((c) => ({ ...toMapShelter(c), raw: c })),
+    events: feed.events || [],
+    barangayNames,
+    syncedAt: new Date(savedAt),
+    fromCache,
+  };
+}
+
 export function useRescuerFeed({ pollMs = 20000 } = {}) {
   const [state, setState] = useState({
-    loading: true, error: null, me: null, incidents: [], hazards: [], centers: [], events: [], barangayNames: {}, syncedAt: null,
+    loading: true, error: null, me: null, incidents: [], hazards: [], centers: [], events: [], barangayNames: {}, syncedAt: null, fromCache: false,
   });
 
   const reload = useCallback(async () => {
     try {
       const [feed, barangays] = await Promise.all([getRescuerFeed(), listBarangays()]);
-      const barangayNames = Object.fromEntries(barangays.map((b) => [b.barangay_id, b.barangay_name]));
-      const myUnitName = (feed.me?.units || []).map((u) => u.unit_name).join(', ') || 'My Unit';
-      const mine = (feed.tickets || []).map((t) => fromTicket(t, myUnitName));
-      const taken = new Set(mine.map((m) => m.lat_lng_key));
-      const others = (feed.active_sos || []).filter((a) => !taken.has(`${a.created_at}|${a.alert_type}`))
-        .map((a) => fromAlert(a, barangayNames));
-      setState({
-        loading: false,
-        error: null,
-        me: { ...feed.me, unitLabel: myUnitName },
-        incidents: [...mine, ...others],
-        hazards: (feed.hazards || []).map((h) => ({
-          ...toMapHazard(h),
-          barangay: barangayNames[h.barangay_id] || '',
-          reportedBy: h.reporter_role === 'resident' ? 'Resident' : h.reporter_role === 'rescuer' ? 'Rescuer' : 'MDRRMO staff',
-          time: timeAgo(h.created_at),
-          clearanceRequested: h.status === 'under_review' && /^cleared/i.test(h.review_note || ''),
-        })).map((h) => ({
-          ...h,
-          // Under review = needs checking again, unless it is a clearance report waiting on the EOC.
-          verificationStatus: h.clearanceRequested ? 'CONFIRMED' : h.status === 'under_review' ? 'UNVERIFIED' : h.verificationStatus,
-        })),
-        centers: (feed.centers || []).map((c) => ({ ...toMapShelter(c), raw: c })),
-        events: feed.events || [],
-        barangayNames,
-        syncedAt: new Date(),
-      });
+      const reporters = await getHazardReporters((feed.hazards || []).map((h) => h.hazard_id));
+      const unverifiedUids = await getUnverifiedResidents((feed.tickets || []).map((t) => t.resident?.uid));
+      const sosWith = await getTicketSosMembers((feed.tickets || []).map((t) => t.ticket_id));
+      feed.tickets = (feed.tickets || []).map((t) => ({ ...t, sos_with: sosWith[t.ticket_id] || null }));
+      const savedAt = new Date().toISOString();
+      setState(buildState(feed, barangays, reporters, savedAt, false, unverifiedUids));
+      // Keep a copy on the phone so the queue, resident details and hazards survive closing
+      // the app and losing signal. Removed on sign-out.
+      AsyncStorage.setItem(FEED_CACHE_KEY, JSON.stringify({ feed, barangays, reporters, savedAt, unverifiedUids })).catch(() => {});
     } catch (e) {
-      setState((s) => ({ ...s, loading: false, error: e.message }));
+      // No signal: keep what is on screen, or fall back to the last saved copy.
+      const cached = await readCachedFeed();
+      setState((s) => (s.syncedAt
+        ? { ...s, loading: false, error: e.message, fromCache: true }
+        : cached
+        ? { ...buildState(cached.feed, cached.barangays, cached.reporters, cached.savedAt, true, cached.unverifiedUids), error: e.message }
+        : { ...s, loading: false, error: e.message }));
     }
+  }, []);
+
+  // Show the saved copy straight away while the live feed loads.
+  useEffect(() => {
+    readCachedFeed().then((cached) => {
+      if (cached) setState((s) => (s.syncedAt ? s : { ...buildState(cached.feed, cached.barangays, cached.reporters, cached.savedAt, true, cached.unverifiedUids), loading: true }));
+    });
   }, []);
 
   useEffect(() => {
@@ -186,3 +234,4 @@ export function useRescuerFeed({ pollMs = 20000 } = {}) {
 
   return { ...state, reload };
 }
+

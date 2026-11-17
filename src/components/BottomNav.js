@@ -3,18 +3,21 @@ import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useRouter, useSegments } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COLORS } from '../constants/colors';
+import { useActiveDisasters } from './DisasterBanner';
+import { useSession } from './SessionProvider';
 
 const RESCUER_ITEMS = [
-  { label: 'Dispatch', icon: '📋', path: '/(rescuer)' },
+  { label: 'SOS', icon: '📋', path: '/(rescuer)' },
   { label: 'Map', icon: '🗺️', path: '/(rescuer)/map' },
   { label: 'Hazards', icon: '🚨', path: '/(rescuer)/alerts' },
   { label: 'Shelters', icon: '🏥', path: '/(rescuer)/shelters' },
-  { label: 'Terminal', icon: '📡', path: '/(rescuer)/profile' },
+  { label: 'Profile', icon: '👤', path: '/(rescuer)/profile' },
 ];
 
 const RESIDENT_ITEMS = [
-  { label: 'Emergency SOS', icon: '🚨', path: '/(resident)', tab: 'SOS' },
-  { label: 'Live Map', icon: '🗺️', path: '/(resident)/evac-map' },
+  { label: 'SOS', icon: '🚨', path: '/(resident)', tab: 'SOS' },
+  { label: 'Map', icon: '🗺️', path: '/(resident)/evac-map' },
+  { label: 'Hazards', icon: '⚠️', path: '/(resident)/hazards' },
   { label: 'Shelters', icon: '🏥', path: '/(resident)', tab: 'SHELTERS' },
   { label: 'Profile', icon: '👤', path: '/(resident)/profile' },
 ];
@@ -27,6 +30,15 @@ export default function BottomNav({ role = null, activeTab = null, onTabChange =
   const isResident = role ? role === 'resident' : segments.includes('(resident)');
   const navItems = isResident ? RESIDENT_ITEMS : RESCUER_ITEMS;
   const currentScreen = segments[segments.length - 1] || 'index';
+  // Red dot on Hazards while a disaster is declared (all of Cordova for responders,
+  // the resident's own barangay for residents).
+  const { profile } = useSession();
+  const myBarangay = profile?.resident?.barangay_id ?? null;
+  const { events: activeDisasters } = useActiveDisasters({
+    barangayId: isResident ? myBarangay : null,
+    enabled: !isResident || myBarangay != null,
+  });
+  const disasterActive = activeDisasters.length > 0;
 
   const handlePress = (item) => {
     if (isResident) {
@@ -57,6 +69,8 @@ export default function BottomNav({ role = null, activeTab = null, onTabChange =
             isActive = activeTab === item.tab;
           } else if (item.path.includes('/evac-map')) {
             isActive = segments.includes('evac-map');
+          } else if (item.path.includes('/hazards')) {
+            isActive = segments.includes('hazards');
           } else if (item.path.includes('/profile')) {
             isActive = segments.includes('profile');
           }
@@ -81,9 +95,14 @@ export default function BottomNav({ role = null, activeTab = null, onTabChange =
             activeOpacity={0.65}
             onPress={() => handlePress(item)}
           >
-            <Text style={[styles.navIcon, isActive && styles.navIconActive]}>
-              {item.icon}
-            </Text>
+            <View>
+              <Text style={[styles.navIcon, isActive && styles.navIconActive]}>
+                {item.icon}
+              </Text>
+              {disasterActive && item.label === 'Hazards' && (
+                <View style={styles.redDot} accessibilityLabel="A disaster is declared" />
+              )}
+            </View>
             <Text style={[styles.navLabel, isActive && styles.navLabelActive]} numberOfLines={1}>
               {item.label}
             </Text>
@@ -117,6 +136,17 @@ const styles = StyleSheet.create({
   navIconActive: {
     opacity: 1,
     transform: [{ scale: 1.15 }],
+  },
+  redDot: {
+    position: 'absolute',
+    top: -2,
+    right: -6,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#DC2626',
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
   },
   navLabel: {
     fontSize: 10,

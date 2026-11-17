@@ -3,14 +3,16 @@ import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { View, Text, StyleSheet, TouchableOpacity, Modal, TextInput, Alert, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import OfflineMap from '../../components/offlineMap';
+import { isInCordova, OUTSIDE_CORDOVA_MESSAGE } from '../../lib/cordovaArea';
 import BottomNav from '../../components/BottomNav';
 import { useSession } from '../../components/SessionProvider';
 import { HAZARD_OPTIONS } from '../../constants/mockData';
 import { FONT_SIZES, FONT_WEIGHTS } from '../../constants/typography';
-import { getPublicMap, reportHazard, subscribe } from '../../services/api';
+import { getMyHazardReports, getNearbyHazards, getPublicMap, reportHazard, subscribe, withdrawMyHazard } from '../../services/api';
 import { getCurrentCoords, distanceMeters, watchCoords } from '../../lib/location';
 import { toMapHazard, toMapShelter } from '../../lib/mapData';
-import { useMyRescue, rescuerPointOf, centerTargetOf, RescueStatusCard } from '../../components/RescueWatcher';
+import { useMyRescue, centerTargetOf, RescueStatusCard } from '../../components/RescueWatcher';
+import { getDemoSpot, getSharedLocation, setDemoSpot, setSharedLocation } from '../../lib/sharedLocation';
 
 // Cordova town centre, used only when the account has no saved home location.
 const TOWN_CENTRE = { lat: 10.2546, lng: 123.952 };
@@ -28,6 +30,12 @@ export default function ResidentEvacMapScreen() {
     icon: params.focusDisasterIcon || '⚠️',
     barangay: params.focusDisasterBarangay || '',
   } : null), [params.focusDisasterTs]);
+  // Set when "Show on map" is pressed on a hazard: the map flies to its existing pin (no extra marker).
+  const hazardFocus = useMemo(() => (params.focusHazardTs && params.focusHazardLat ? {
+    id: `${params.focusHazardId || 'hazard'}|${params.focusHazardTs}`,
+    lat: Number(params.focusHazardLat),
+    lng: Number(params.focusHazardLng),
+  } : null), [params.focusHazardTs]);
   const { profile } = useSession();
   const resident = profile?.resident || {};
   const homeCoords = resident.gps_lat != null
@@ -44,6 +52,8 @@ export default function ResidentEvacMapScreen() {
 
   const [hazards, setHazards] = useState([]);
   const [myReports, setMyReports] = useState([]);
+  // Other people's reports within 1 km (last 6 h) that nobody has confirmed yet: shown faded.
+  const [nearbyUnchecked, setNearbyUnchecked] = useState([]);
   const [shelters, setShelters] = useState([]);
   const [sending, setSending] = useState(false);
   const [isDroppingHazard, setIsDroppingHazard] = useState(false);
@@ -53,7 +63,6 @@ export default function ResidentEvacMapScreen() {
 
   // The rescue unit coming to this resident (live position and reserved center).
   const rescue = useMyRescue();
-  const rescuerPoint = rescuerPointOf(rescue.mission);
   const missionTarget = centerTargetOf(rescue.mission);
 
   const distFromHome = distanceMeters(userGpsCoords, homeCoords) || 0;
@@ -64,6 +73,14 @@ export default function ResidentEvacMapScreen() {
       const map = await getPublicMap();
       setHazards((map?.hazards || []).map(toMapHazard));
       setShelters((map?.centers || []).map(toMapShelter));
+      // This resident's own reports stay on the map until they are closed, even after leaving the screen.
+      const spot = getSharedLocation() || getDemoSpot();
+      const near = spot ? await getNearbyHazards(spot).catch(() => null) : null;
+      if (near) setNearbyUnchecked(near.filter((h) => h.status !== 'confirmed').map(toMapHazard));
+      const own = await getMyHazardReports().catch(() => null);
+      if (own) {
+        setMyReports(own.filter((h) => ['unverified', 'under_review', 'confirmed'].includes(h.status)).map(toMapHazard));
+      }
     } catch {
       // Keep what is already on the map when offline.
     }
@@ -76,38 +93,66 @@ export default function ResidentEvacMapScreen() {
     return () => { unsubscribe(); clearInterval(timer); };
   }, [load]);
 
-  // Start from the phone's real position when location is allowed.
+  // "Report hazard" on the Hazards screen opens this map ready to drop the pin.
   useEffect(() => {
+    if (params.reportHazardTs) setIsDroppingHazard(true);
+  }, [params.reportHazardTs]);
+
+  // Let the nearby-hazard watcher check from the same spot (phone GPS or demo).
+  // Only a real fix or a demo spot the user picked counts; the starting guess (home) is not shared,
+  // so "Do you see it too?" is never asked from a place the person is not at.
+  const [positionKnown, setPositionKnown] = useState(false);
+  useEffect(() => { if (positionKnown) setSharedLocation(userGpsCoords); }, [userGpsCoords, positionKnown]);
+  const placeMe = (coords) => { setPositionKnown(true); setUserGpsCoords(coords); };
+  // Reload nearby unchecked reports when you (or your demo spot) move.
+  useEffect(() => { if (positionKnown) load(); }, [positionKnown, userGpsCoords.lat, userGpsCoords.lng, load]);
+
+  // Start from the demo spot picked earlier in this session (so changing screens does not
+  // snap back to real GPS); otherwise from the phone's real position when location is allowed.
+  useEffect(() => {
+    const demo = getDemoSpot();
+    if (demo) {
+      setGpsMode('SIMULATED');
+      placeMe(demo);
+      return;
+    }
     getCurrentCoords().then((coords) => {
-      if (coords) {
+      if (coords && !getDemoSpot()) {
         setGpsMode('REAL');
-        setUserGpsCoords(coords);
+        placeMe(coords);
       }
     });
   }, []);
+
+  // Remember a demo spot for other screens; choosing real GPS forgets it.
+  useEffect(() => {
+    if (gpsMode === 'REAL') setDemoSpot(null);
+    else if (positionKnown) setDemoSpot(userGpsCoords);
+  }, [gpsMode, positionKnown, userGpsCoords]);
 
   // While this map is open and on real GPS, follow the phone as it moves so the
   // position dot and the route to a disaster or SOS stay current.
   useFocusEffect(
     useCallback(() => {
       if (gpsMode !== 'REAL') return undefined;
-      return watchCoords(setUserGpsCoords);
+      return watchCoords(placeMe);
     }, [gpsMode])
   );
 
-  // Confirmed hazards for everyone, plus this phone's own reports until they are reviewed.
-  const shownHazards = [...hazards, ...myReports.filter((r) => !hazards.some((h) => h.id === r.id))];
+  // Confirmed hazards, this phone's own open reports, and unchecked reports near you (faded).
+  const shownHazards = [...hazards, ...myReports, ...nearbyUnchecked]
+    .filter((h, i, all) => all.findIndex((x) => x.id === h.id) === i);
 
   const handleGpsFound = (coords) => {
     setIsLocatingGps(false);
-    setUserGpsCoords({ lat: coords.lat, lng: coords.lng });
+    placeMe({ lat: coords.lat, lng: coords.lng });
   };
 
   const handleGpsError = () => {
     setIsLocatingGps(false);
     Alert.alert(
       'Indoor GPS Signal Weak ⚠️',
-      'Hardware satellite lock timed out indoors. Switch to Simulated GPS or align with registered home?',
+      'Could not get your location. Use a demo location instead?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -128,6 +173,16 @@ export default function ResidentEvacMapScreen() {
     );
   };
 
+  const takeBack = async (id) => {
+    try {
+      await withdrawMyHazard(id);
+      setMyReports((prev) => prev.filter((r) => r.id !== id));
+      Alert.alert('Report taken back', 'It is no longer on the map.');
+    } catch (e) {
+      Alert.alert('Could not take it back', e.message);
+    }
+  };
+
   const handleBroadcastHazard = async () => {
     if (!hazardNote.trim()) return Alert.alert('Required', 'Please enter a description.');
     setSending(true);
@@ -142,8 +197,12 @@ export default function ResidentEvacMapScreen() {
       setPendingCoords(null);
       setHazardNote('');
       Alert.alert(
-        'Hazard Pinned ⚠️',
-        'Broadcast logged as UNVERIFIED. An active CERT rescuer or MDRRMO marshal will verify this report on-scene.'
+        'Hazard reported ⚠️',
+        'Saved as not yet confirmed. A responder or the MDRRMO will check it. Made a mistake? You can take it back now, or later from Hazards → My reports.',
+        report ? [
+          { text: 'Take it back', style: 'destructive', onPress: () => takeBack(report) },
+          { text: 'OK' },
+        ] : undefined
       );
     } catch (e) {
       Alert.alert('Hazard not sent', e.message);
@@ -156,15 +215,15 @@ export default function ResidentEvacMapScreen() {
     <View style={styles.container}>
       <View style={[styles.topBar, { paddingTop: insets.top + 6 }]}>
         <View style={styles.headerTextGroup}>
-          <Text style={styles.sub}>CORDOVA EVACUATION ROUTE</Text>
-          <Text style={styles.title} numberOfLines={1}>Live Hazard & Safety Map</Text>
+          <Text style={styles.sub}>CORDOVA</Text>
+          <Text style={styles.title} numberOfLines={1}>Hazard & shelter map</Text>
         </View>
         <TouchableOpacity
           style={[styles.badgeGps, isDisplaced && { backgroundColor: '#FEF3C7' }]}
           onPress={() => setGpsModalVisible(true)}
         >
           <Text style={[styles.badgeGpsText, isDisplaced && { color: '#B45309' }]}>
-            {gpsMode === 'REAL' ? '🛰️ REAL GPS' : '🕹️ SIM GPS'} • {isDisplaced ? `${distFromHome}m AWAY` : 'AT HOME'}
+            {gpsMode === 'REAL' ? '🛰️ PHONE GPS' : '🕹️ DEMO LOCATION'} • {isDisplaced ? `${distFromHome}m AWAY` : 'AT HOME'}
           </Text>
         </TouchableOpacity>
       </View>
@@ -179,7 +238,7 @@ export default function ResidentEvacMapScreen() {
 
       {isSettingSimGps && (
         <View style={[styles.dropBanner, { backgroundColor: '#1E3A8A' }]}>
-          <Text style={styles.dropText}>🕹️ TAP MAP TO SET YOUR SIMULATED GPS LOCATION</Text>
+          <Text style={styles.dropText}>🕹️ DEMO: TAP MAP TO SET YOUR LOCATION</Text>
           <TouchableOpacity onPress={() => setIsSettingSimGps(false)}>
             <Text style={styles.dropCancel}>CANCEL</Text>
           </TouchableOpacity>
@@ -188,7 +247,7 @@ export default function ResidentEvacMapScreen() {
 
       {isDroppingHazard && (
         <View style={styles.dropBanner}>
-          <Text style={styles.dropText}>📍 TAP MAP TO SET HAZARD LOCATION</Text>
+          <Text style={styles.dropText}>📍 TAP THE MAP WHERE THE HAZARD IS</Text>
           <TouchableOpacity onPress={() => setIsDroppingHazard(false)}>
             <Text style={styles.dropCancel}>CANCEL</Text>
           </TouchableOpacity>
@@ -206,16 +265,20 @@ export default function ResidentEvacMapScreen() {
         isDroppingHazard={isDroppingHazard}
         triggerGpsQuery={triggerGpsQuery}
         focusPoint={disasterFocus}
-        rescuerPoint={rescuerPoint}
+        selectedHazardPin={hazardFocus}
         missionTarget={missionTarget}
         onHazardCoordinateDrop={(c) => {
           setIsDroppingHazard(false);
+          if (!isInCordova(c.lat, c.lng)) {
+            Alert.alert('Outside Cordova', OUTSIDE_CORDOVA_MESSAGE);
+            return;
+          }
           setPendingCoords(c);
         }}
         onSimGpsCoordinateDrop={(c) => {
           setIsSettingSimGps(false);
           setGpsMode('SIMULATED');
-          setUserGpsCoords(c);
+          placeMe(c);
         }}
         onGpsLocationFound={handleGpsFound}
         onGpsLocationError={handleGpsError}
@@ -228,11 +291,11 @@ export default function ResidentEvacMapScreen() {
             onPress={() => setGpsModalVisible(true)}
           >
             <Text style={styles.btnText}>
-              {isLocatingGps ? '🛰️ LOCATING...' : `📍 GPS (${gpsMode})`}
+              {isLocatingGps ? '🛰️ LOCATING...' : `📍 GPS (${gpsMode === 'REAL' ? 'PHONE' : 'DEMO'})`}
             </Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.btnHazard} onPress={() => setIsDroppingHazard(true)}>
-            <Text style={styles.btnText}>🚨 PIN HAZARD</Text>
+            <Text style={styles.btnText}>🚨 REPORT HAZARD</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -241,9 +304,9 @@ export default function ResidentEvacMapScreen() {
       <Modal visible={gpsModalVisible} transparent animationType="fade">
         <View style={styles.modalBg}>
           <View style={styles.dialog}>
-            <Text style={[styles.dialogTitle, { color: '#1E3A8A' }]}>📍 GPS LOCATION SOURCE</Text>
+            <Text style={[styles.dialogTitle, { color: '#1E3A8A' }]}>📍 YOUR LOCATION</Text>
             <Text style={styles.modalSub}>
-              Choose real-time device hardware GPS or simulate movement to test away-from-home displacement (35m):
+              Use the phone's GPS, or a demo location to test being away from home (more than 35 m):
             </Text>
 
             <View style={{ gap: 8, marginVertical: 10 }}>
@@ -256,8 +319,8 @@ export default function ResidentEvacMapScreen() {
                   setTriggerGpsQuery(Date.now());
                 }}
               >
-                <Text style={styles.optTitle}>🛰️ Use Real-Time Hardware GPS</Text>
-                <Text style={styles.optSub}>Reads actual smartphone GPS coordinates continuously.</Text>
+                <Text style={styles.optTitle}>🛰️ Use phone GPS</Text>
+                <Text style={styles.optSub}>Your real location.</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -268,34 +331,34 @@ export default function ResidentEvacMapScreen() {
                   setIsSettingSimGps(true);
                 }}
               >
-                <Text style={[styles.optTitle, { color: '#1E3A8A' }]}>👆 Tap on Map to Set Simulated Location</Text>
-                <Text style={styles.optSub}>Tap any street on the map to move your blue GPS dot.</Text>
+                <Text style={[styles.optTitle, { color: '#1E3A8A' }]}>👆 Demo: tap the map to set location</Text>
+                <Text style={styles.optSub}>For testing only. Moves your blue dot.</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 style={styles.optBtn}
                 onPress={() => {
                   setGpsMode('SIMULATED');
-                  setUserGpsCoords(homeCoords);
+                  placeMe(homeCoords);
                   setGpsModalVisible(false);
                   setTriggerGpsQuery(Date.now());
                 }}
               >
-                <Text style={styles.optTitle}>🏠 Preset: Inside My Registered Home (0m)</Text>
-                <Text style={styles.optSub}>Snaps blue GPS dot directly onto your registered house pin.</Text>
+                <Text style={styles.optTitle}>🏠 Demo: at my home</Text>
+                <Text style={styles.optSub}>For testing only. Puts your dot on your house pin.</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 style={styles.optBtn}
                 onPress={() => {
                   setGpsMode('SIMULATED');
-                  setUserGpsCoords({ lat: 10.2505, lng: 123.9488 });
+                  placeMe({ lat: 10.2505, lng: 123.9488 });
                   setGpsModalVisible(false);
                   setTriggerGpsQuery(Date.now());
                 }}
               >
-                <Text style={[styles.optTitle, { color: '#D97706' }]}>🏃 Preset: Displaced at Public Market (~570m away)</Text>
-                <Text style={styles.optSub}>Simulates evacuating away from home & draws trajectory line.</Text>
+                <Text style={[styles.optTitle, { color: '#D97706' }]}>🏃 Demo: at the public market (~570 m away)</Text>
+                <Text style={styles.optSub}>For testing only. Shows you as away from home.</Text>
               </TouchableOpacity>
             </View>
 
@@ -310,7 +373,7 @@ export default function ResidentEvacMapScreen() {
       <Modal visible={Boolean(pendingCoords)} transparent animationType="slide">
         <View style={styles.modalBg}>
           <View style={styles.dialog}>
-            <Text style={styles.dialogTitle}>REPORT FIELD HAZARD</Text>
+            <Text style={styles.dialogTitle}>REPORT A HAZARD</Text>
             <View style={{ gap: 6, marginVertical: 8 }}>
               {HAZARD_OPTIONS.map((opt) => (
                 <TouchableOpacity
@@ -328,7 +391,7 @@ export default function ResidentEvacMapScreen() {
                 <Text style={styles.btnCancelText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.btnSubmit} onPress={handleBroadcastHazard} disabled={sending}>
-                {sending ? <ActivityIndicator color="#FFF" /> : <Text style={styles.btnSubmitText}>Broadcast</Text>}
+                {sending ? <ActivityIndicator color="#FFF" /> : <Text style={styles.btnSubmitText}>Send</Text>}
               </TouchableOpacity>
             </View>
           </View>

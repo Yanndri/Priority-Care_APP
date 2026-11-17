@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useMemo, useCallback } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Paths } from 'expo-file-system';
-import rawGeoJSON from '../constants/cordova-barangays.json';
+import rawGeoJSON from '../constants/cordova-borders.json';
 
 export default function OfflineMap({
   residents = [],
@@ -21,9 +21,6 @@ export default function OfflineMap({
   focusPoint = null, // { key, lat, lng, label, note, icon, barangay }: flies to a disaster and marks it
   selectedResident = null,
   selectedHazardPin = null,
-  // Live position of the rescue unit coming to this resident:
-  // { lat, lng, accuracy, label, stale } (null hides it). Animated as it moves.
-  rescuerPoint = null,
   // Evacuation center reserved for the mission: { key, lat, lng, name } (null clears).
   // Drawn as a destination pin with the route from this phone to it.
   missionTarget = null,
@@ -77,9 +74,6 @@ export default function OfflineMap({
           ${JSON.stringify(selectedResident?.id || null)}
         );
       }
-      if (typeof window.syncRescuer === 'function') {
-        window.syncRescuer(${JSON.stringify(rescuerPoint)});
-      }
       ${
         !selectedBarangay
           ? `if (typeof window.clearBarangayHighlight === 'function') { window.clearBarangayHighlight(); }`
@@ -123,7 +117,6 @@ export default function OfflineMap({
     selectedHazardPin,
     selectedBarangay,
     focusPoint,
-    rescuerPoint,
     missionTarget,
     pinLabel,
   ]);
@@ -257,13 +250,6 @@ export default function OfflineMap({
             justify-content: center;
             font-size: 13px;
           }
-          .unit-live {
-            width: 30px; height: 30px; border-radius: 15px;
-            background-color: #DC2626; border: 2px solid #FFFFFF;
-            box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.30), 0 2px 5px rgba(0,0,0,0.5);
-            display: flex; align-items: center; justify-content: center; font-size: 15px;
-          }
-          .unit-live.stale { background-color: #94A3B8; box-shadow: 0 0 0 4px rgba(100, 116, 139, 0.25), 0 2px 5px rgba(0,0,0,0.4); }
           .mission-pin {
             width: 30px; height: 30px; border-radius: 15px 15px 15px 2px;
             background-color: #16A34A; border: 2px solid #FFFFFF; color: #FFFFFF;
@@ -309,15 +295,22 @@ export default function OfflineMap({
       <body>
         <div id="map"></div>
         <script>
+          // Opens on Cordova and cannot be moved or zoomed out past it.
+          var CORDOVA_BOUNDS = [[10.175, 123.895], [10.295, 124.02]];
           var map = L.map('map', { 
             zoomControl: false,
-            minZoom: 12,
-            maxZoom: 19
-          }).setView([10.2550, 123.9510], 14);
+            minZoom: 13,
+            maxZoom: 19,
+            maxBounds: CORDOVA_BOUNDS,
+            maxBoundsViscosity: 1.0
+          }).setView([10.2526, 123.9496], 14);
 
           var tileLayer = L.tileLayer('${tileSource}', {
-            minZoom: 12,
-            maxNativeZoom: 16,
+            minZoom: 13,
+            bounds: CORDOVA_BOUNDS,
+            // Online, OpenStreetMap has sharp tiles down to street level (19). Saved offline
+            // tiles only go to 16, so past that they are just enlarged.
+            maxNativeZoom: ${isOffline ? 16 : 19},
             maxZoom: 19,
             attribution: '© OpenStreetMap'
           }).addTo(map);
@@ -475,14 +468,11 @@ export default function OfflineMap({
             route = { slot: slot, key: key, name: name, from: from, to: { lat: lat, lng: lng }, layers: [], token: token,
                       navigate: Boolean(navigate), pts: null, steps: null, stepIdx: 0 };
 
-            var straight = L.polyline([[from.lat, from.lng], [lat, lng]], {
-              color: '#2563EB', weight: 3, dashArray: '6, 8', opacity: 0.85
-            }).addTo(map);
-            route.layers.push(straight);
+            // Nothing is drawn and the map does not move until the router answers, so the
+            // view changes once: to the road route, or (no connection) to a straight line.
             var straightText = '📏 <b>' + fmtDist(getDistanceMeters(from.lat, from.lng, lat, lng)) + '</b> ' +
               directionName(from.lat, from.lng, lat, lng) + ' of you, in a straight line';
             showRouteInfo('🧭 Finding the road route to <b>' + escapeHtml(name) + '</b>…');
-            if (fit && isNew) map.fitBounds([[from.lat, from.lng], [lat, lng]], { padding: [70, 70], maxZoom: 17 });
 
             var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
             var timer = setTimeout(function() { if (ctrl) ctrl.abort(); }, 8000);
@@ -495,7 +485,6 @@ export default function OfflineMap({
                 if (!route || route.token !== token) return;
                 var rt = j && j.routes && j.routes[0];
                 if (!rt || !rt.geometry || !rt.geometry.coordinates.length) throw new Error('no route');
-                map.removeLayer(straight);
                 var pts = rt.geometry.coordinates.map(function(c) { return [c[1], c[0]]; });
                 var casing = L.polyline(pts, { color: '#FFFFFF', weight: 8, opacity: 0.9 }).addTo(map);
                 var line = L.polyline(pts, { color: '#2563EB', weight: 5, opacity: 0.95 }).addTo(map);
@@ -519,6 +508,11 @@ export default function OfflineMap({
               .catch(function() {
                 clearTimeout(timer);
                 if (!route || route.token !== token) return;
+                var straight = L.polyline([[from.lat, from.lng], [lat, lng]], {
+                  color: '#2563EB', weight: 3, dashArray: '6, 8', opacity: 0.85
+                }).addTo(map);
+                route.layers = [straight];
+                if (fit && isNew) map.fitBounds(straight.getBounds(), { padding: [70, 70], maxZoom: 17 });
                 showRouteInfo(straightText + '<br><small>No connection for a road route. Head toward ' + escapeHtml(name) + ' using the roads you know.</small>');
               });
           };
@@ -554,7 +548,7 @@ export default function OfflineMap({
               });
               gpsMarker = L.marker([coords.lat, coords.lng], { icon: gpsIcon, zIndexOffset: 1000 }).addTo(map);
 
-              var modeLabel = currentGpsMode === 'REAL' ? '🛰️ Real-Time Hardware GPS' : '🕹️ Simulated GPS Position';
+              var modeLabel = currentGpsMode === 'REAL' ? '🛰️ Phone GPS' : '🕹️ Demo location (not real)';
               var popupLabel = window.__pinLabel ? '<b>' + escapeHtml(window.__pinLabel) + '</b>' : isRescuer
                 ? "<b>🚑 " + escapeHtml(myUnitLabel) + "</b><br>" + modeLabel
                 : "<b>🔵 My Position</b><br>" + modeLabel;
@@ -681,7 +675,18 @@ export default function OfflineMap({
                 iconAnchor: [11, 11]
               });
               var marker = L.marker([h.lat, h.lng], { icon: icon, zIndexOffset: 450 }).addTo(map);
-              
+              // Residents have no hazard sheet: the pin itself shows what was reported.
+              if (currentRole === 'resident') {
+                var HAZ_LABELS = { FIRE: 'Fire', FLOOD: 'Flood', BLOCK: 'Blocked road or debris', WIRE: 'Live electrical wire', LANDSLIDE: 'Landslide', OTHER: 'Other hazard' };
+                var when = h.createdAt ? new Date(h.createdAt).toLocaleString('en-PH', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+                marker.bindPopup(
+                  '<b>' + escapeHtml((h.icon || '⚠️') + ' ' + (HAZ_LABELS[h.type] || 'Hazard')) + '</b>' +
+                  (isUnverified ? '<br><i>Not confirmed yet</i>' : '') +
+                  (h.description ? '<br>' + escapeHtml(h.description) : '') +
+                  (when ? '<br><small>Reported ' + escapeHtml(when) + '</small>' : '')
+                );
+              }
+
               marker.on('click', function(e) {
                 if (dropHazardActive || dropSimGpsActive) return;
                 L.DomEvent.stopPropagation(e);
@@ -693,7 +698,9 @@ export default function OfflineMap({
             });
           }
 
+          // Barangay shapes are background only: taps go to the map (offline download is a button on Profile).
           var geoJsonLayer = L.geoJSON(rawData, {
+            interactive: false,
             style: function(feature) {
               var name = feature.properties.adm4_name || feature.properties.ADM4_EN || feature.properties.name;
               var isCached = Boolean(cachedSectors && cachedSectors[name]);
@@ -819,7 +826,7 @@ export default function OfflineMap({
           map.on('locationerror', function(e) {
             window.ReactNativeWebView.postMessage(JSON.stringify({
               type: 'GPS_LOCATION_ERROR',
-              message: e.message || 'Hardware GPS signal timeout'
+              message: e.message || 'Could not get a GPS fix'
             }));
           });
 
@@ -858,6 +865,8 @@ export default function OfflineMap({
             if (res && res.lat && res.lng) {
               selectedResId = res.id;
               renderResidentMarkers(allResidents);
+              // A responder with a location gets a route, which also moves the map; otherwise just fly there.
+              var routing = currentRole === 'rescuer' && Boolean(myCoords);
               if (currentRole === 'rescuer') window.routeTo('selection', 'r:' + res.id, res.lat, res.lng, res.name || 'the resident', true);
 
               var homeLat = res.homeLat || res.lat;
@@ -885,11 +894,11 @@ export default function OfflineMap({
                   opacity: 0.9
                 }).addTo(map);
 
-                map.fitBounds([
+                if (!routing) map.fitBounds([
                   [res.lat, res.lng],
                   [homeLat, homeLng]
                 ], { padding: [60, 60], maxZoom: 17, animate: true });
-              } else {
+              } else if (!routing) {
                 map.flyTo([res.lat, res.lng], 17, { animate: true, duration: 0.5 });
               }
             }
@@ -916,9 +925,11 @@ export default function OfflineMap({
               });
               disasterMarker = L.marker([p.lat, p.lng], { icon: icon, zIndexOffset: 1000 })
                 .addTo(map)
-                .bindPopup('<b>' + escapeHtml(p.label || 'Disaster') + '</b>' + (p.note ? '<br>' + escapeHtml(p.note) : ''));
-              if (myCoords) window.routeTo('disaster', 'd:' + (p.key || p.lat + ',' + p.lng), p.lat, p.lng, p.label || 'the disaster', true);
-              else map.flyTo([p.lat, p.lng], 16, { animate: true, duration: 0.8 });
+                .bindPopup('<b>' + escapeHtml(p.label || 'Disaster') + '</b>' + (p.note ? '<br>' + escapeHtml(p.note) : ''),
+                  { autoPan: false });
+              // Centre on the disaster (no route: it is an area, not a household).
+              window.clearRouteSlot('disaster');
+              map.flyTo([p.lat, p.lng], 16, { animate: true, duration: 0.8 });
               setTimeout(function() { if (disasterMarker) disasterMarker.openPopup(); }, 900);
             } else if (p.barangay) {
               var want = String(p.barangay).toLowerCase().replace(/[^a-z]/g, '');
@@ -930,63 +941,6 @@ export default function OfflineMap({
           };
 
           // ---------- Rescue unit coming to this resident (live, animated) ----------
-          var rescuerMarker = null, rescuerCircle = null, rescuerAnim = null, rescuerFitted = false;
-          function rescuerIcon(stale) {
-            return L.divIcon({
-              className: 'gps-dot-wrapper',
-              html: '<div class="unit-live' + (stale ? ' stale' : '') + '">🚑</div>',
-              iconSize: [30, 30], iconAnchor: [15, 15]
-            });
-          }
-          window.syncRescuer = function(p) {
-            if (!p || !p.lat || !p.lng) {
-              if (rescuerAnim) cancelAnimationFrame(rescuerAnim);
-              if (rescuerMarker) { map.removeLayer(rescuerMarker); rescuerMarker = null; }
-              if (rescuerCircle) { map.removeLayer(rescuerCircle); rescuerCircle = null; }
-              rescuerFitted = false;
-              return;
-            }
-            var label = '<b>🚑 ' + escapeHtml(p.label || 'Rescue unit') + '</b>' +
-              (p.accuracy ? '<br>GPS accuracy ±' + Math.round(p.accuracy) + ' m' : '') +
-              (p.stale ? '<br><i>Last known position</i>' : '');
-            if (!rescuerMarker) {
-              rescuerMarker = L.marker([p.lat, p.lng], { icon: rescuerIcon(p.stale), zIndexOffset: 1200 }).addTo(map).bindPopup(label);
-              rescuerCircle = L.circle([p.lat, p.lng], {
-                radius: p.accuracy || 0, color: '#DC2626', weight: 1, opacity: 0.4, fillOpacity: 0.08
-              }).addTo(map);
-              rescuerMarker._stale = Boolean(p.stale);
-            } else {
-              if (rescuerMarker._stale !== Boolean(p.stale)) {
-                rescuerMarker.setIcon(rescuerIcon(p.stale));
-                rescuerMarker._stale = Boolean(p.stale);
-              }
-              rescuerMarker.setPopupContent(label);
-              rescuerCircle.setRadius(p.accuracy || 0);
-              // Glide to the new fix instead of jumping.
-              var from = rescuerMarker.getLatLng(), to = L.latLng(p.lat, p.lng);
-              if (from.lat !== to.lat || from.lng !== to.lng) {
-                if (rescuerAnim) cancelAnimationFrame(rescuerAnim);
-                var t0 = null, dur = 1200;
-                var step = function(ts) {
-                  if (t0 === null) t0 = ts;
-                  var k = Math.min(1, (ts - t0) / dur);
-                  var e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
-                  var ll = L.latLng(from.lat + (to.lat - from.lat) * e, from.lng + (to.lng - from.lng) * e);
-                  rescuerMarker.setLatLng(ll);
-                  rescuerCircle.setLatLng(ll);
-                  if (k < 1) rescuerAnim = requestAnimationFrame(step);
-                };
-                rescuerAnim = requestAnimationFrame(step);
-              }
-            }
-            // First time: show both the unit and this phone (or the resident's pin).
-            if (!rescuerFitted) {
-              rescuerFitted = true;
-              var other = myCoords || currentGpsCoords;
-              if (other && other.lat) map.fitBounds([[p.lat, p.lng], [other.lat, other.lng]], { padding: [80, 80], maxZoom: 17 });
-              else map.flyTo([p.lat, p.lng], 16, { animate: true, duration: 0.8 });
-            }
-          };
 
           // ---------- Evacuation center reserved for this mission ----------
           // Its route takes priority over the route to a selected pin.

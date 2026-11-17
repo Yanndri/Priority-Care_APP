@@ -121,7 +121,7 @@ export default function RegisterScreen() {
         onPress: () => {
           const centroid = { lat: Number(barangay.center_lat), lng: Number(barangay.center_lng) };
           setHomeCoords(centroid);
-          Alert.alert('Calibrated 📍', `Anchored to the ${barangay.barangay_name} centre. Recalibrate at home with GPS for a precise pin.`);
+          Alert.alert('Location set 📍', `Anchored to the ${barangay.barangay_name} centre. Update it at home with GPS for an exact pin.`);
         },
       });
     }
@@ -219,7 +219,7 @@ export default function RegisterScreen() {
       await refresh();
       Alert.alert(
         'Registration Submitted! 🎉',
-        `Head: ${name} (${barangay.barangay_name})\n• Household: ${totalHeadcount} Souls\n• VPI Score: ${score} (${priority})\n• Extraction Gear: ${gear}\n\nYour ID is queued for barangay verification. Sign in next time with ${normalizeContact(contact)} and your PIN.${warnings.length ? `\n\n⚠️ ${warnings.join('\n')}` : ''}`,
+        `Head: ${name} (${barangay.barangay_name})\n• Household: ${totalHeadcount} people\n• Priority score: ${score} (${priority})\n• Equipment needed: ${gear}\n\nYour ID is queued for barangay verification. Sign in next time with ${normalizeContact(contact)} and your PIN.${warnings.length ? `\n\n⚠️ ${warnings.join('\n')}` : ''}`,
         [{ text: 'Open Household Portal', onPress: () => router.replace('/(resident)') }]
       );
     } catch (e) {
@@ -311,11 +311,11 @@ export default function RegisterScreen() {
         {/* Repeatable Home Rooftop Geotag Calibration */}
         <View style={styles.geoTagCard}>
           <View style={styles.geoTagInfo}>
-            <Text style={styles.geoTagTitle}>🏠 ROOFTOP RESIDENCE COORDINATES</Text>
+            <Text style={styles.geoTagTitle}>🏠 HOME LOCATION</Text>
             <Text style={styles.geoTagSub}>
               {homeCoords
                 ? `Calibrated: ${homeCoords.lat.toFixed(5)}, ${homeCoords.lng.toFixed(5)}`
-                : 'Calibrate your home location for zero-visibility emergency extraction.'}
+                : 'Pin your home so responders can find it.'}
             </Text>
           </View>
           <TouchableOpacity
@@ -323,7 +323,7 @@ export default function RegisterScreen() {
             onPress={handleLockHomeLocation}
           >
             <Text style={styles.btnLockGeoText}>
-              {homeCoords ? '🔄 Recalibrate' : '📍 Calibrate GPS'}
+              {homeCoords ? '🔄 Update' : '📍 Use my GPS'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -377,7 +377,7 @@ export default function RegisterScreen() {
 
         {/* 3. Dynamic Household Members Roster */}
         <View style={styles.rosterHeaderRow}>
-          <Text style={styles.sectionHeader}>3. HOUSEHOLD MEMBERS ({totalHeadcount} SOULS TOTAL)</Text>
+          <Text style={styles.sectionHeader}>3. HOUSEHOLD MEMBERS ({totalHeadcount} PEOPLE)</Text>
           <TouchableOpacity style={styles.btnAddMember} onPress={handleAddMember}>
             <Text style={styles.btnAddMemberText}>+ Add Member</Text>
           </TouchableOpacity>
@@ -441,7 +441,7 @@ export default function RegisterScreen() {
         ))}
 
         {/* 4. Structure & Micro-Navigation */}
-        <Text style={[styles.sectionHeader, { marginTop: 18 }]}>4. STRUCTURE & MICRO-NAVIGATION</Text>
+        <Text style={[styles.sectionHeader, { marginTop: 18 }]}>4. HOUSE & LANDMARK</Text>
         <View style={styles.row}>
           {HOUSE_TYPES.map((h) => (
             <TouchableOpacity key={h.id} style={[styles.pill, houseType === h.id && styles.pillActive]} onPress={() => setHouseType(h.id)}>

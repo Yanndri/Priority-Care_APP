@@ -1,13 +1,12 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, Modal, Alert, ScrollView, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import BottomNav from '../../components/BottomNav';
 import { FONT_SIZES, FONT_WEIGHTS } from '../../constants/typography';
 import { useRescuerFeed } from '../../lib/rescuerFeed';
-import DisasterBanner from '../../components/DisasterBanner';
 import { shelterLoad } from '../../lib/location';
 import { centerTypeLabel } from '../../lib/mapData';
-import { admitWalkIn, personBadge, searchEvacuees } from '../../services/api';
+import { admitWalkIn } from '../../services/api';
 
 const LOAD_STYLE = {
   OPEN: { statusBg: '#DCFCE7', statusColor: '#15803D' },
@@ -32,9 +31,6 @@ export default function RescuerSheltersScreen() {
   const barangays = Object.entries(feed.barangayNames).map(([id, name]) => ({ id: Number(id), name }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  const [searchName, setSearchName] = useState('');
-  const [searchResults, setSearchResults] = useState([]);
-  const [searchError, setSearchError] = useState(null);
   const [intakeModalVisible, setIntakeModalVisible] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -47,25 +43,9 @@ export default function RescuerSheltersScreen() {
   const [targetShelterId, setTargetShelterId] = useState(null);
   const targetShelter = shelterList.find((s) => s.id === targetShelterId) || shelterList[0];
 
-  // Cross-facility lookup for family reunification (Module 2.6), searched on the server.
-  useEffect(() => {
-    const q = searchName.trim();
-    if (q.length < 2) {
-      setSearchResults([]);
-      setSearchError(null);
-      return undefined;
-    }
-    const timer = setTimeout(() => {
-      searchEvacuees(q)
-        .then((rows) => { setSearchResults(rows || []); setSearchError(null); })
-        .catch((e) => setSearchError(/search_field_evacuees/.test(e.message) ? 'Evacuee search is not switched on in the database yet.' : e.message));
-    }, 350);
-    return () => clearTimeout(timer);
-  }, [searchName]);
-
   const handleWalkinAdmission = async () => {
     if (!walkinName.trim() || !walkinBarangayId) {
-      return Alert.alert('Required Fields', 'Please enter the representative name and barangay of origin.');
+      return Alert.alert('Required', 'Enter the head of household and their barangay.');
     }
     if (!targetShelter) return Alert.alert('No shelter open', 'There is no open evacuation centre to admit them to.');
     const count = Math.min(50, Math.max(1, parseInt(walkinHeadcount, 10) || 1));
@@ -89,8 +69,8 @@ export default function RescuerSheltersScreen() {
     setWalkinNeeds('');
 
     Alert.alert(
-      'Walk-In Admitted 🏥',
-      `${walkinName} (${count} Souls) checked in at ${targetShelter.name}.\nAdded to cross-facility reunification directory.`
+      'Checked in 🏥',
+      `${walkinName} (${count} people) checked in at ${targetShelter.name}.`
     );
   };
 
@@ -98,14 +78,13 @@ export default function RescuerSheltersScreen() {
     <View style={[styles.container, { paddingTop: insets.top + 8 }]}>
       <View style={styles.header}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.sub}>CAMP COORDINATION (MODULES 2.1 – 2.6)</Text>
-          <Text style={styles.title}>Evacuation Shelter Management</Text>
+          <Text style={styles.sub}>EVACUATION CENTRES</Text>
+          <Text style={styles.title}>Centres & evacuees</Text>
         </View>
         <TouchableOpacity style={styles.btnWalkin} onPress={() => setIntakeModalVisible(true)}>
-          <Text style={styles.btnWalkinText}>➕ Manual Intake</Text>
+          <Text style={styles.btnWalkinText}>➕ Add walk-in</Text>
         </TouchableOpacity>
       </View>
-      <DisasterBanner events={feed.events} style={{ marginTop: 8 }} />
 
       <FlatList
         data={shelterList}
@@ -120,35 +99,7 @@ export default function RescuerSheltersScreen() {
         contentContainerStyle={{ padding: 14, gap: 12 }}
         ListHeaderComponent={
           <View style={{ gap: 8, marginBottom: 4 }}>
-            {/* Cross-Facility Lookup for Family Reunification (Module 2.6) */}
-            <Text style={styles.secTitle}>CROSS-FACILITY EVACUEE REUNIFICATION SEARCH</Text>
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search displaced family member's name..."
-              value={searchName}
-              onChangeText={setSearchName}
-            />
-            {searchError ? <Text style={styles.searchSub}>{searchError}</Text> : null}
-            {searchResults.map((r, i) => {
-              const status = personBadge(r);
-              return (
-                <View key={`${r.kind}-${r.id}-${i}`} style={styles.searchCard}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.searchName}>
-                      {r.name}{r.kind === 'walkin' ? ` (${r.headcount} souls, walk-in)` : r.relationship ? ` (${r.relationship})` : ''}
-                    </Text>
-                    <Text style={styles.searchSub}>
-                      Origin: Brgy. {r.barangay_name || '—'}{r.sitio ? `, ${r.sitio}` : ''} • Shelter: <Text style={{ fontWeight: '900', color: '#1E3A8A' }}>{r.center_name || 'Not yet admitted'}</Text>
-                    </Text>
-                  </View>
-                  <View style={[styles.statusBadge, status === 'MISSING' ? styles.bgMissing : styles.bgAdmitted]}>
-                    <Text style={[styles.statusBadgeText, status === 'MISSING' && { color: '#DC2626' }]}>{status}</Text>
-                  </View>
-                </View>
-              );
-            })}
-
-            <Text style={[styles.secTitle, { marginTop: 10 }]}>ACTIVE CORDOVA EVACUATION CENTERS</Text>
+            <Text style={styles.secTitle}>OPEN CENTRES IN CORDOVA</Text>
           </View>
         }
         renderItem={({ item }) => (
@@ -168,20 +119,12 @@ export default function RescuerSheltersScreen() {
               <Text style={styles.occupancyText}>
                 {item.occupied} / {item.capacity} Beds Occupied ({item.percent}%)
               </Text>
-              <Text style={styles.slotsLeftText}>{Math.max(0, item.capacity - item.occupied)} Slots Left</Text>
+              <Text style={styles.slotsLeftText}>{Math.max(0, item.capacity - item.occupied)} spaces left</Text>
             </View>
             <View style={styles.barBg}>
               <View style={{ height: '100%', width: `${item.percent}%`, backgroundColor: item.barColor }} />
             </View>
 
-
-            {/* Daily Relief Demand Estimate (Module 2.5) */}
-            <View style={styles.reliefStrip}>
-              <Text style={styles.reliefTitle}>DAILY RELIEF DEMAND (MODULE 2.5):</Text>
-              <Text style={styles.reliefDesc}>
-                📦 {item.occupied} FFPs • 💧 {item.occupied * 3}L Water • 🧼 {Math.ceil(item.occupied / 4)} Hygiene Kits
-              </Text>
-            </View>
           </View>
         )}
       />
@@ -189,10 +132,11 @@ export default function RescuerSheltersScreen() {
       {/* Manual Walk-In Intake Form Modal */}
       <Modal visible={intakeModalVisible} transparent animationType="slide">
         <View style={styles.modalBg}>
-          <View style={styles.dialog}>
-            <Text style={styles.dialogTitle}>📝 MANUAL WALK-IN EVACUEE INTAKE</Text>
+          {/* Scrolls so "Check in" stays reachable on small phones (it used to fall off-screen). */}
+          <ScrollView style={styles.dialog} contentContainerStyle={{ paddingBottom: 4 }} keyboardShouldPersistTaps="handled">
+            <Text style={styles.dialogTitle}>📝 ADD A WALK-IN EVACUEE</Text>
             <Text style={styles.dialogSub}>
-              Log displaced residents who self-evacuated directly to this facility:
+              For families who came to the centre on their own:
             </Text>
 
             <Text style={styles.fieldLabel}>HEAD OF HOUSEHOLD NAME</Text>
@@ -222,10 +166,10 @@ export default function RescuerSheltersScreen() {
               </View>
             </View>
 
-            <Text style={styles.fieldLabel}>SPECIAL NEEDS / MEDICAL VULNERABILITY</Text>
+            <Text style={styles.fieldLabel}>SPECIAL NEEDS</Text>
             <TextInput style={styles.input} placeholder="e.g., 1 Senior PWD, 1 Infant" value={walkinNeeds} onChangeText={setWalkinNeeds} />
 
-            <Text style={styles.fieldLabel}>RECEIVING FACILITY</Text>
+            <Text style={styles.fieldLabel}>CENTRE</Text>
             <View style={{ gap: 6, marginBottom: 12 }}>
               {shelterList.map((s) => (
                 <TouchableOpacity
@@ -245,10 +189,10 @@ export default function RescuerSheltersScreen() {
                 <Text style={styles.btnCancelText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.btnSubmit} onPress={handleWalkinAdmission} disabled={saving}>
-                {saving ? <ActivityIndicator color="#FFF" /> : <Text style={styles.btnSubmitText}>Confirm Admission</Text>}
+                {saving ? <ActivityIndicator color="#FFF" /> : <Text style={styles.btnSubmitText}>Check in</Text>}
               </TouchableOpacity>
             </View>
-          </View>
+          </ScrollView>
         </View>
       </Modal>
 
@@ -266,14 +210,6 @@ const styles = StyleSheet.create({
   btnWalkinText: { color: '#FFF', fontSize: FONT_SIZES.caption, fontWeight: FONT_WEIGHTS.extraBold },
 
   secTitle: { fontSize: FONT_SIZES.caption, fontWeight: FONT_WEIGHTS.extraBold, color: '#64748B' },
-  searchInput: { backgroundColor: '#FFF', borderWidth: 1, borderColor: '#CBD5E1', borderRadius: 8, padding: 9, fontSize: FONT_SIZES.body },
-  searchCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#EFF6FF', padding: 10, borderRadius: 8, borderWidth: 1, borderColor: '#BFDBFE' },
-  searchName: { fontSize: FONT_SIZES.body, fontWeight: FONT_WEIGHTS.extraBold, color: '#0F172A' },
-  searchSub: { fontSize: FONT_SIZES.tiny, color: '#475569', marginTop: 2 },
-  statusBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 1 },
-  bgAdmitted: { backgroundColor: '#DCFCE7', borderColor: '#86EFAC' },
-  bgMissing: { backgroundColor: '#FEE2E2', borderColor: '#FECACA' },
-  statusBadgeText: { fontSize: FONT_SIZES.tiny, fontWeight: FONT_WEIGHTS.extraBold, color: '#15803D' },
 
   shelterCard: { backgroundColor: '#FFF', padding: 14, borderRadius: 12, borderWidth: 1, borderColor: '#E2E8F0', elevation: 1 },
   cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
@@ -288,12 +224,9 @@ const styles = StyleSheet.create({
   barBg: { height: 8, backgroundColor: '#E2E8F0', borderRadius: 4, overflow: 'hidden', marginVertical: 6 },
   catchmentText: { fontSize: FONT_SIZES.caption, color: '#475569', marginTop: 4 },
 
-  reliefStrip: { backgroundColor: '#F8FAFC', padding: 8, borderRadius: 6, marginTop: 10, borderWidth: 1, borderColor: '#E2E8F0' },
-  reliefTitle: { fontSize: FONT_SIZES.tiny, fontWeight: FONT_WEIGHTS.black, color: '#DC2626' },
-  reliefDesc: { fontSize: FONT_SIZES.caption, fontWeight: FONT_WEIGHTS.bold, color: '#1E293B', marginTop: 2 },
 
   modalBg: { flex: 1, backgroundColor: 'rgba(15,23,42,0.7)', justifyContent: 'center', padding: 18 },
-  dialog: { backgroundColor: '#FFF', borderRadius: 12, padding: 16 },
+  dialog: { backgroundColor: '#FFF', borderRadius: 12, padding: 16, maxHeight: '90%', flexGrow: 0 },
   dialogTitle: { fontSize: FONT_SIZES.bodyBold, fontWeight: FONT_WEIGHTS.black, color: '#1E3A8A' },
   dialogSub: { fontSize: FONT_SIZES.caption, color: '#475569', marginTop: 4, marginBottom: 10 },
   fieldLabel: { fontSize: FONT_SIZES.tiny, fontWeight: FONT_WEIGHTS.extraBold, color: '#475569', marginBottom: 4 },

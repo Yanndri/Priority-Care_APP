@@ -1,10 +1,10 @@
+import SosDetails from '../../components/SosDetails';
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import BottomNav from '../../components/BottomNav';
 import { useRescuerFeed } from '../../lib/rescuerFeed';
-import DisasterBanner from '../../components/DisasterBanner';
 import { sortResidentsByVPI, getVPITheme } from '../../utils/vpi';
 
 function getDistanceMeters(lat1, lon1, lat2, lon2) {
@@ -25,7 +25,22 @@ export default function RescuerDispatchScreen() {
   const feed = useRescuerFeed();
   const unitLabel = feed.me?.unitLabel || '—';
 
-  const activeTickets = feed.incidents;
+  // Filter: calls assigned to my unit first, then my barangay, then all of Cordova (mutual aid).
+  const myBarangays = (feed.me?.units || []).map((u) => feed.barangayNames?.[u.barangay_id]).filter(Boolean);
+  const [pickedArea, setArea] = useState(null);
+  const assignedCount = feed.incidents.filter((r) => r.isMine).length;
+  // Until the user picks: "Assigned to me" when the unit has a call, otherwise my barangay.
+  const area = pickedArea || (assignedCount > 0 ? 'ASSIGNED' : myBarangays.length ? 'BRGY' : 'ALL');
+  const inMyBarangay = (r) => myBarangays.includes(r.barangay);
+  const inArea = (r) => (area === 'ASSIGNED' ? r.isMine : area === 'BRGY' ? inMyBarangay(r) : true);
+  const showAll = area === 'ALL';
+  const activeTickets = feed.incidents.filter(inArea);
+  const myAreaCount = feed.incidents.filter(inMyBarangay).length;
+  const areaChips = [
+    ['ASSIGNED', `Assigned to me (${assignedCount})`],
+    ...(myBarangays.length ? [['BRGY', `Brgy. ${myBarangays.join(', ')} (${myAreaCount})`]] : []),
+    ['ALL', `All Cordova (${feed.incidents.length})`],
+  ];
 
   // My unit's tickets first, then the rest of the active SOS calls, each by vulnerability.
   const sorted = [...sortResidentsByVPI(activeTickets.filter((r) => r.isMine)), ...sortResidentsByVPI(activeTickets.filter((r) => !r.isMine))].filter((r) =>
@@ -41,17 +56,27 @@ export default function RescuerDispatchScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top + 8 }]}>
-      {/* CAD Terminal Header */}
+      {/* Header */}
       <View style={styles.header}>
         <View>
-          <Text style={styles.sub}>CAD TERMINAL • UNIT: {unitLabel.toUpperCase()}</Text>
-          <Text style={styles.title}>Incident Dispatch Queue ({sorted.length})</Text>
+          <Text style={styles.sub}>MY UNIT: {unitLabel.toUpperCase()}</Text>
+          <Text style={styles.title}>SOS calls ({sorted.length})</Text>
         </View>
         <TouchableOpacity style={styles.mapBtn} onPress={() => router.replace('/(rescuer)/map')}>
-          <Text style={styles.mapBtnText}>🗺️ Map Terminal</Text>
+          <Text style={styles.mapBtnText}>🗺️ Map</Text>
         </TouchableOpacity>
       </View>
-      <DisasterBanner events={feed.events} style={{ marginTop: 8 }} />
+
+      {/* Assigned to me / my barangay / all of Cordova */}
+      {true && (
+        <View style={[styles.filterRow, { flexWrap: 'wrap' }]}>
+          {areaChips.map(([key, text]) => (
+            <TouchableOpacity key={key} style={[styles.chip, area === key && styles.chipActive]} onPress={() => setArea(key)} accessibilityRole="button">
+              <Text style={[styles.chipText, area === key && styles.chipTextActive]}>{text}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
 
       {/* VPI Priority Filter Chips */}
       <View style={styles.filterRow}>
@@ -74,7 +99,10 @@ export default function RescuerDispatchScreen() {
         onRefresh={feed.reload}
         ListEmptyComponent={
           <Text style={{ textAlign: 'center', color: '#64748B', marginTop: 24 }}>
-            {feed.error ? `Could not load the queue: ${feed.error}` : 'No active SOS calls right now.'}
+            {feed.error ? `Could not load the queue: ${feed.error}`
+              : area === 'ASSIGNED' && feed.incidents.length > 0 ? 'No calls assigned to your unit right now. Tap your barangay or "All Cordova" to see other SOS calls.'
+              : !showAll && feed.incidents.length > 0 ? `No SOS in your barangay. ${feed.incidents.length} elsewhere in Cordova: tap "All Cordova".`
+              : 'No active SOS calls right now.'}
           </Text>
         }
         renderItem={({ item }) => {
@@ -94,7 +122,7 @@ export default function RescuerDispatchScreen() {
               {isCritical && (
                 <View style={styles.criticalStrip}>
                   <Text style={styles.criticalStripText}>
-                    ⚡ IMMEDIATE EXTRACTION AUTHORIZED • PARALLEL TRIAGE
+                    ⚡ HIGH PRIORITY • GO FIRST
                   </Text>
                 </View>
               )}
@@ -117,11 +145,11 @@ export default function RescuerDispatchScreen() {
               <View style={styles.verificationRow}>
                 {item.verificationStatus === 'CONFIRMED' ? (
                   <View style={[styles.verifBadge, styles.badgeConfirmed]}>
-                    <Text style={styles.verifTextConfirmed}>✓ EOC CONFIRMED</Text>
+                    <Text style={styles.verifTextConfirmed}>✓ CONFIRMED BY MDRRMO</Text>
                   </View>
                 ) : (
                   <View style={[styles.verifBadge, styles.badgeUnverified]}>
-                    <Text style={styles.verifTextUnverified}>⚠️ CITIZEN SOS (VERIFY ON-SCENE)</Text>
+                    <Text style={styles.verifTextUnverified}>⚠️ RESIDENT SOS (CHECK ON ARRIVAL)</Text>
                   </View>
                 )}
 
@@ -133,18 +161,22 @@ export default function RescuerDispatchScreen() {
 
                 {item.duplicateAlert && (
                   <View style={[styles.verifBadge, styles.badgeDuplicate]}>
-                    <Text style={styles.verifTextDuplicate}>🔁 REPEATED ALERT</Text>
+                    <Text style={styles.verifTextDuplicate}>🔁 SENT MORE THAN ONCE</Text>
                   </View>
                 )}
               </View>
 
-              {item.landmark ? <Text style={styles.landmark}>🚩 {item.landmark}</Text> : null}
+              {/* What the resident said, the MDRRMO's instructions and what to bring */}
+              {item.isMine ? <SosDetails res={item} style={{ marginTop: 8 }} />
+                : item.landmark ? <Text style={styles.landmark}>🚩 {item.landmark}</Text> : null}
 
               {/* CAD Action Footer */}
               <View style={styles.cardFooter}>
-                <Text style={styles.gearText} numberOfLines={1}>
-                  GEAR: {item.requiredGear}
-                </Text>
+                {!item.isMine && (
+                  <Text style={styles.gearText} numberOfLines={1}>
+                    GEAR: {item.requiredGear}
+                  </Text>
+                )}
                 <View
                   style={[
                     styles.unitPill,
@@ -166,7 +198,7 @@ export default function RescuerDispatchScreen() {
                     ]}
                   >
                     {isAssignedToMe
-                      ? '🚑 ASSIGNED TO UNIT • VIEW 📍'
+                      ? '🚑 ASSIGNED TO YOUR UNIT • VIEW 📍'
                       : item.assignedUnit
                       ? `${item.assignedUnit} ASSIGNED`
                       : '⏳ AWAITING DISPATCH 📍'}

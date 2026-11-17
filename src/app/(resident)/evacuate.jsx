@@ -5,6 +5,8 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, Alert,
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { getMyPreemptive, reportMyPreemptive, onLiveSignal } from '../../services/api';
+import { useSession } from '../../components/SessionProvider';
+import { useActiveDisasters } from '../../components/DisasterBanner';
 
 const STATUSES = [
   { id: 'staying_home', icon: '🏠', label: 'Staying home', hint: 'We are safe where we are.' },
@@ -35,6 +37,11 @@ export default function EvacuateScreen() {
   const [address, setAddress] = useState('');
   const [headcount, setHeadcount] = useState(1);
   const [note, setNote] = useState('');
+  // Leaving a centre while the disaster is still declared needs a second tap (it is allowed:
+  // people do leave, and recording it keeps the centre's count right).
+  const { profile } = useSession();
+  const myBarangay = profile?.resident?.barangay_id ?? null;
+  const { events: activeDisasters } = useActiveDisasters({ barangayId: myBarangay, enabled: myBarangay != null });
 
   const load = useCallback(async () => {
     try {
@@ -60,8 +67,18 @@ export default function EvacuateScreen() {
     return onLiveSignal(['events', 'centers', 'shelter_plans', 'preemptive'], load);
   }, [load]);
 
-  const submit = async () => {
+  const submit = async (confirmed = false) => {
     if (!status) return Alert.alert('Choose one', 'Tap what your household is doing right now.');
+    if (status === 'returned_home' && activeDisasters.length > 0 && !confirmed) {
+      return Alert.alert(
+        'The disaster is not over yet ⚠️',
+        `${activeDisasters[0].name} is still declared in your barangay. The MDRRMO will announce when it is safe to go home. Go home anyway?`,
+        [
+          { text: 'Stay for now', style: 'cancel' },
+          { text: 'Yes, we went home', style: 'destructive', onPress: () => submit(true) },
+        ],
+      );
+    }
     const withDest = needsDestination(status);
     if (withDest && destType === 'evacuation_center' && !centerId) return Alert.alert('Choose a centre', 'Tap the evacuation centre you are going to.');
     if (withDest && destType !== 'evacuation_center' && !address.trim()) return Alert.alert('Where are you going?', 'Type the address or place.');
@@ -187,7 +204,7 @@ export default function EvacuateScreen() {
                 </TouchableOpacity>
               </View>
               <TextInput style={styles.input} value={note} onChangeText={setNote} placeholder="Note for the barangay (optional)" maxLength={500} />
-              <TouchableOpacity style={styles.submit} onPress={submit} disabled={busy}>
+              <TouchableOpacity style={styles.submit} onPress={() => submit()} disabled={busy}>
                 {busy ? <ActivityIndicator color="#FFF" /> : <Text style={styles.submitText}>Send to my barangay</Text>}
               </TouchableOpacity>
             </>

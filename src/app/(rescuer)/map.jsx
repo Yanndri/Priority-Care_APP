@@ -1,19 +1,22 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Modal, TextInput, Alert, Image, ScrollView, ActivityIndicator } from 'react-native';
+import { Linking, View, Text, StyleSheet, TouchableOpacity, Modal, TextInput, Alert, Image, ScrollView, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { File, Paths } from 'expo-file-system';
 import OfflineMap from '../../components/offlineMap';
+import { isInCordova, OUTSIDE_CORDOVA_MESSAGE } from '../../lib/cordovaArea';
 import BottomNav from '../../components/BottomNav';
-import SectorDetailSheet from '../../components/SectorDetailSheet';
 import { COLORS } from '../../constants/colors';
 import { HAZARD_OPTIONS, RESCUER_DEFAULT_COORDS } from '../../constants/mockData';
 import { useRescuerFeed } from '../../lib/rescuerFeed';
-import DisasterBanner from '../../components/DisasterBanner';
 import { getCurrentCoords } from '../../lib/location';
 import { useTracker } from '../../lib/rescueTracker';
-import MissionPanel, { GpsStatusLine } from '../../components/MissionPanel';
-import { recordEvacuation, reportHazard, reviewHazard, signedPhotoUrl, updateTicketStatus } from '../../services/api';
+import RescueCard from '../../components/RescueCard';
+import SosDetails from '../../components/SosDetails';
+import {
+  BACKUP_NEEDS, cancelBackupRequest, getBackupRequests, onLiveSignal, recordEvacuation, reportHazard, withdrawMyHazard, requestBackup,
+  reviewHazard, signedPhotoUrl, updateTicketStatus,
+} from '../../services/api';
+import { getDemoSpot, setDemoSpot, setSharedLocation } from '../../lib/sharedLocation';
 
 function getDistanceMeters(lat1, lon1, lat2, lon2) {
   if (!lat1 || !lon1 || !lat2 || !lon2) return 0;
@@ -40,7 +43,7 @@ function getEmergencyTheme(emergencyType) {
   }
   if (type.includes('FIRE')) {
     return {
-      label: 'FIRE CONFLAGRATION',
+      label: 'FIRE',
       icon: '🔥',
       accentColor: '#EA580C',
       badgeBg: '#FFEDD5',
@@ -85,7 +88,17 @@ export default function RescuerMapScreen() {
   const feed = useRescuerFeed();
   // Field notes that only live on this phone (no table for them yet).
   const [localNotes, setLocalNotes] = useState({});
-  const residents = feed.incidents.map((r) => ({ ...r, ...localNotes[r.id] }));
+  // Open backup requests on my unit's tickets (saved in the database).
+  const [backups, setBackups] = useState([]);
+  const loadBackups = () => getBackupRequests().then((rows) => setBackups(rows || [])).catch(() => {});
+  useEffect(() => {
+    loadBackups();
+    return onLiveSignal(['tickets'], loadBackups);
+  }, []);
+  const residents = feed.incidents.map((r) => ({
+    ...r, ...localNotes[r.id],
+    backups: r.ticketId ? backups.filter((b) => b.ticket_id === r.ticketId) : [],
+  }));
   const hazards = feed.hazards;
   const setNote = (id, patch) => setLocalNotes((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
   const [selectedResident, setSelectedResident] = useState(null);
@@ -125,7 +138,14 @@ export default function RescuerMapScreen() {
     lat: RESCUER_DEFAULT_COORDS.lat,
     lng: RESCUER_DEFAULT_COORDS.lng,
   } : null);
+  // The nearby-hazard check ("Do you see it too?") only uses a real fix or a spot the user picked,
+  // never the starting placeholder above (that asked people 10 km away if they could see a fire).
+  const [positionKnown, setPositionKnown] = useState(false);
+  const placeUnit = (coords) => { setPositionKnown(true); setRescuerGpsCoords(coords); };
   const [missionTarget, setMissionTarget] = useState(null);
+  // The rescue card shrinks to one line so the route stays visible.
+  const [sheetMin, setSheetMin] = useState(false);
+  useEffect(() => { setSheetMin(false); }, [selectedResident?.id]);
   const [triggerGpsQuery, setTriggerGpsQuery] = useState(0);
   const [gpsModalVisible, setGpsModalVisible] = useState(false);
 
@@ -136,7 +156,6 @@ export default function RescuerMapScreen() {
   const [forceOfflineSim, setForceOfflineSim] = useState(false);
   const [lastSynced, setLastSynced] = useState('Just now');
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
-  const [cachedSectors, setCachedSectors] = useState({});
 
   const [isDroppingHazard, setIsDroppingHazard] = useState(false);
   const [pendingCoords, setPendingCoords] = useState(null);
@@ -177,21 +196,36 @@ export default function RescuerMapScreen() {
       return fresh ? { ...prev, ...fresh } : prev;
     });
     setSelectedHazardPin((prev) => (prev ? hazards.find((h) => h.id === prev.id) || null : prev));
-  }, [feed.syncedAt, localNotes]);
+  }, [feed.syncedAt, localNotes, backups]);
 
-  // Start from the phone's real position when location is allowed.
+  // Let the nearby-hazard watcher check from the same spot (phone GPS or demo).
+  useEffect(() => { if (positionKnown) setSharedLocation(rescuerGpsCoords); }, [rescuerGpsCoords, positionKnown]);
+
+  // Start from the demo spot picked earlier in this session (so changing screens does not
+  // snap back to real GPS); otherwise from the phone's real position when location is allowed.
   useEffect(() => {
+    const demo = getDemoSpot();
+    if (demo) {
+      setGpsMode('SIMULATED');
+      placeUnit(demo);
+      return;
+    }
     getCurrentCoords().then((coords) => {
-      if (coords) {
+      if (coords && !getDemoSpot()) {
         setGpsMode('REAL');
-        setRescuerGpsCoords(coords);
+        placeUnit(coords);
       }
     });
   }, []);
 
-  // While this map is open, follow the phone as it moves so the ambulance marker and
-  // the route stay current. The same shared watcher reports the unit's position for an
-  // active mission (lib/rescueTracker), so the phone never runs two GPS watchers.
+  // Remember a demo spot for other screens; choosing real GPS forgets it.
+  useEffect(() => {
+    if (gpsMode === 'REAL') setDemoSpot(null);
+    else if (positionKnown) setDemoSpot(rescuerGpsCoords);
+  }, [gpsMode, positionKnown, rescuerGpsCoords]);
+
+  // While this map is open, follow the phone as it moves so your marker and the
+  // route stay current. The position stays on this phone (nothing is sent).
   const [mapFocused, setMapFocused] = useState(false);
   useFocusEffect(useCallback(() => {
     setMapFocused(true);
@@ -202,7 +236,7 @@ export default function RescuerMapScreen() {
     if (!tracker.fix) return;
     if (gpsMode !== 'REAL' && __DEV__) return; // a developer placed the unit by hand
     if (gpsMode !== 'REAL') setGpsMode('REAL');
-    setRescuerGpsCoords({ lat: tracker.fix.lat, lng: tracker.fix.lng });
+    placeUnit({ lat: tracker.fix.lat, lng: tracker.fix.lng });
   }, [tracker.fix, gpsMode]);
 
   useEffect(() => {
@@ -226,21 +260,6 @@ export default function RescuerMapScreen() {
       setBusy(false);
     }
   };
-
-  useEffect(() => {
-    const loadCache = async () => {
-      try {
-        const metaFile = new File(Paths.document, 'cached_sectors.json');
-        if (metaFile.exists) {
-          const content = await metaFile.text();
-          setCachedSectors(JSON.parse(content || '{}'));
-        }
-      } catch (e) {
-        console.warn('Cache read error:', e);
-      }
-    };
-    loadCache();
-  }, []);
 
   useEffect(() => {
     if (forceOfflineSim) {
@@ -271,36 +290,9 @@ export default function RescuerMapScreen() {
     return () => { isMounted = false; clearInterval(timer); };
   }, [forceOfflineSim]);
 
-  const handleDownloadSuccess = async (sectorPacket) => {
-    const now = new Date();
-    const dateStr = `${now.getHours() % 12 || 12}:${String(now.getMinutes()).padStart(2, '0')}`;
-    const updated = {
-      ...cachedSectors,
-      [sectorPacket.name]: {
-        cachedAt: `${dateStr} (${sectorPacket.tileCount} tiles)`,
-        bounds: sectorPacket.bounds,
-        householdCount: sectorPacket.householdCount,
-        cachedResidents: sectorPacket.cachedResidents,
-        cachedHazards: sectorPacket.cachedHazards,
-      },
-    };
-    setCachedSectors(updated);
-    setSelectedBarangay((prev) =>
-      prev?.name === sectorPacket.name
-        ? { ...prev, isCached: true, cachedAt: `${dateStr} (${sectorPacket.tileCount} tiles)` }
-        : prev
-    );
-    try {
-      const metaFile = new File(Paths.document, 'cached_sectors.json');
-      await metaFile.write(JSON.stringify(updated));
-    } catch (e) {
-      console.warn('Write cache error:', e);
-    }
-  };
-
   const handleGpsLocationFound = (coords) => {
     setIsLocatingGps(false);
-    setRescuerGpsCoords({ lat: coords.lat, lng: coords.lng });
+    placeUnit({ lat: coords.lat, lng: coords.lng });
   };
 
   const handleGpsLocationError = () => {
@@ -308,10 +300,10 @@ export default function RescuerMapScreen() {
     if (!__DEV__) {
       return Alert.alert('GPS signal weak ⚠️', 'Could not get a satellite fix. Move to an open area; your last known position stays on the map.');
     }
-    Alert.alert('Rescuer GPS Weak ⚠️', 'Satellite lock timed out indoors. Switch to Simulated GPS?', [
+    Alert.alert('GPS signal weak ⚠️', 'Could not get your location. Use a demo location instead?', [
       { text: 'Keep Trying', style: 'cancel' },
       {
-        text: 'Open Simulator 🕹️',
+        text: 'Use demo location 🕹️',
         onPress: () => {
           setGpsMode('SIMULATED');
           setGpsModalVisible(true);
@@ -322,26 +314,26 @@ export default function RescuerMapScreen() {
 
   // 1. Verify Ground Truth
   const handleVerifySelectedHazard = async (haz) => {
-    if (await run(() => reviewHazard(haz.id, 'confirm', 'Verified on scene by field unit'))) {
-      Alert.alert('Ground Truth Confirmed ✅', 'Verified on scene. Broadcast updated across all field terminals.');
+    if (await run(() => reviewHazard(haz.id, 'confirm', 'Confirmed on site by a responder'))) {
+      Alert.alert('Confirmed ✅', 'Marked as confirmed on every map.');
     }
   };
 
   // 2. Undo Hazard Verification (back to "needs checking")
   const handleUndoHazardVerification = (haz) => {
     Alert.alert(
-      'Revert Hazard Verification? ↩️',
+      'Undo? ↩️',
       haz.clearanceRequested
         ? 'Withdraw your clearance report? The hazard goes back to confirmed.'
-        : `Revert this ${haz.type} obstruction back to Unverified status?`,
+        : `Set this ${haz.type} report back to not confirmed?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Confirm Revert',
+          text: 'Undo',
           style: 'destructive',
           onPress: () => run(() => (haz.clearanceRequested
-            ? reviewHazard(haz.id, 'confirm', 'Clearance report withdrawn by field unit')
-            : reviewHazard(haz.id, 'review', 'Verification withdrawn by field unit'))),
+            ? reviewHazard(haz.id, 'confirm', 'Responder withdrew the cleared report')
+            : reviewHazard(haz.id, 'review', 'Responder undid the confirmation'))),
         },
       ]
     );
@@ -349,17 +341,17 @@ export default function RescuerMapScreen() {
 
   // 3. Relay Road Cleared to EOC (does not remove the pin; the EOC resolves it on the web)
   const handleRelayClearanceToEoc = (haz) => {
-    if (haz.clearanceRequested) return Alert.alert('Already sent', 'The EOC has your clearance report and will archive the pin.');
+    if (haz.clearanceRequested) return Alert.alert('Already sent', 'The MDRRMO already has your report and will remove the pin.');
     Alert.alert(
-      'Relay Road Clearance to EOC 📡',
-      `Notify MDRRMO Command Center that ${haz.type} obstruction is clear? EOC will verify and officially archive the pin.`,
+      'Mark road as cleared? 📡',
+      `Tell the MDRRMO that the ${haz.type} is cleared? They will check and remove the pin.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Transmit SITREP',
+          text: 'Send',
           onPress: async () => {
-            if (await run(() => reviewHazard(haz.id, 'review', 'Cleared on scene by field unit; awaiting EOC to resolve'))) {
-              Alert.alert('SITREP Transmitted 📡', 'MDRRMO EOC notified. Dispatcher will review and archive the pin.');
+            if (await run(() => reviewHazard(haz.id, 'review', 'Cleared on site by a responder; waiting for the MDRRMO to remove it'))) {
+              Alert.alert('Sent 📡', 'The MDRRMO will check and remove the pin.');
             }
           },
         },
@@ -370,17 +362,20 @@ export default function RescuerMapScreen() {
   // 4. Report False Alarm (dismisses the report; it leaves every map)
   const handleFlagHazardFalse = (haz) => {
     Alert.alert(
-      'Report False Alarm to EOC 🚫',
-      `Confirm no active ${haz.type} hazard exists at this location? The report will be dismissed.`,
+      'Mark as false report? 🚫',
+      `You checked and there is no ${haz.type} here? The report will be removed.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Report to EOC',
+          text: 'No, false report',
           style: 'destructive',
           onPress: async () => {
             if (await run(() => reviewHazard(haz.id, 'dismiss', 'False alarm: no hazard found on scene'))) {
               setSelectedHazardPin(null);
-              Alert.alert('Report Relayed 📡', 'Logged as a false alarm and removed from the map.');
+              Alert.alert('Removed 📡', 'Saved as a false report and taken off the map.', [
+                { text: 'Undo', onPress: () => run(() => reviewHazard(haz.id, 'review', 'Responder undid the false-report mark')) },
+                { text: 'OK' },
+              ]);
             }
           },
         },
@@ -403,76 +398,48 @@ export default function RescuerMapScreen() {
     setCheckInModalVisible(true);
   };
 
-  const handleAdvanceStatus = (res) => {
-    if (!res.isMine) {
-      return Alert.alert('Not assigned to your unit', 'The MDRRMO dispatcher assigns this SOS from the web console. It will appear in your queue once your unit is assigned.');
-    }
-    const nextSteps = { PENDING: 'acknowledged', ACCEPTED: 'en_route', EN_ROUTE: 'on_scene' };
-    if (res.status === 'ON_SCENE') return openCheckIn(res);
-    const next = nextSteps[res.status];
-    if (next) run(() => updateTicketStatus(res.ticketId, next));
-  };
-
   const handleInitiatePreEmptiveEvac = (res) => {
     Alert.alert(
-      'Pre-Emptive Evacuation 🚶',
-      `Evacuate ${res.name} (VPI: ${res.vpiScore}) to designated shelter?`,
+      'Evacuate early 🚶',
+      `Bring ${res.name}'s household (priority score ${res.vpiScore}) to their evacuation centre?`,
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Begin Evacuation', onPress: () => openCheckIn(res) },
+        { text: 'Start', onPress: () => openCheckIn(res) },
       ]
     );
   };
 
-  const handleUndoStatus = () => {
-    Alert.alert('Status cannot be undone', 'Ticket steps only move forward. Radio the MDRRMO dispatcher if a step was logged by mistake.');
+  // Backup requests are saved on the ticket; the website shows them to the MDRRMO.
+  const handleSendSupportRequest = async (need) => {
+    setSupportModalVisible(false);
+    if (!selectedResident?.ticketId || !selectedResident.isMine) {
+      return Alert.alert('Not assigned to your unit', 'Only the unit assigned to this SOS can ask for backup.');
+    }
+    try {
+      setBusy(true);
+      await requestBackup(selectedResident.ticketId, need);
+      await loadBackups();
+      Alert.alert('Backup requested 📡', `${BACKUP_NEEDS[need].label} for ${selectedResident.name}. The MDRRMO sees it on the website now.`);
+    } catch (e) {
+      Alert.alert('Not sent', e.message);
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const handleManualVerifyOnScene = (res) => {
-    setNote(res.id, { verificationStatus: 'CONFIRMED', verifiedBy: 'Visual on-scene' });
-    Alert.alert('Distress Verified ✅', `Ground truth confirmed. Incident at ${res.name}'s household marked as Verified.`);
-  };
-
-  const handleLogFalseReport = (res) => {
+  const handleCancelSupportRequest = (request) => {
     Alert.alert(
-      'Flag False Alarm? 🚫',
-      `Confirm that your unit arrived at ${res.name}'s coordinates and found no emergency or hazard?`,
+      'Cancel backup request? 🛑',
+      `Cancel the request for ${BACKUP_NEEDS[request.need]?.label || request.need}?`,
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: 'Keep', style: 'cancel' },
         {
-          text: 'Confirm False Alarm',
-          style: 'destructive',
+          text: 'Cancel request', style: 'destructive',
           onPress: async () => {
-            if (await run(() => updateTicketStatus(res.ticketId, 'resolved', 'False alarm: no emergency found on scene'))) {
-              setSelectedResident(null);
-              setFocusedResidentId(null);
-              Alert.alert('Incident Closed ✅', 'Logged to Audit History as False Alarm.');
-            }
+            try { await cancelBackupRequest(request.request_id); await loadBackups(); }
+            catch (e) { Alert.alert('Not cancelled', e.message); }
           },
         },
-      ]
-    );
-  };
-
-  // Backup requests stay on this phone for now (no table for them yet); radio the EOC as well.
-  const handleSendSupportRequest = (type) => {
-    setSupportModalVisible(false);
-    const now = new Date();
-    const timeStr = `${now.getHours() % 12 || 12}:${String(now.getMinutes()).padStart(2, '0')}`;
-    setNote(selectedResident.id, { supportRequest: { type, requestedAt: timeStr, status: 'PENDING_EOC' } });
-    Alert.alert(
-      'Backup request noted 📡',
-      `• Requisition: ${type}\n• Target: ${selectedResident.name}\n• GPS: ${rescuerGpsCoords ? `${rescuerGpsCoords.lat.toFixed(4)}, ${rescuerGpsCoords.lng.toFixed(4)}` : 'no fix yet'}\n\nRadio this to the EOC as well; backup requests are not sent to the server yet.`
-    );
-  };
-
-  const handleCancelSupportRequest = (res) => {
-    Alert.alert(
-      'Cancel Support Request? 🛑',
-      `Withdraw requisition for ${res.supportRequest?.type}?`,
-      [
-        { text: 'Keep Active', style: 'cancel' },
-        { text: 'Confirm Cancel', style: 'destructive', onPress: () => setNote(res.id, { supportRequest: null }) },
       ]
     );
   };
@@ -501,8 +468,8 @@ export default function RescuerMapScreen() {
       sosActive: false,
       members: members.map((m) => (checkedMemberIds.includes(m.id)
         ? { ...m, status: 'ADMITTED', shelter: center.name }
-        : { ...m, status: 'NOT REACHED', shelter: 'Unaccounted at Extraction' })),
-      evacuatedTo: `${center.name} (${members.length ? `${admitted}/${members.length}` : res.householdSize} Admitted)`,
+        : { ...m, status: 'NOT REACHED', shelter: 'Not found at pickup' })),
+      evacuatedTo: `${center.name} (${members.length ? `${admitted}/${members.length}` : res.householdSize} checked in)`,
       color: '#16A34A',
     });
     setCheckInModalVisible(false);
@@ -512,48 +479,32 @@ export default function RescuerMapScreen() {
     setCheckedMemberIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
   };
 
-  const getBtnConfig = (res) => {
-    const map = {
-      PENDING: { label: '✋ ACKNOWLEDGE TICKET', bg: '#1E3A8A' },
-      ACCEPTED: { label: '🚑 MARK EN ROUTE', bg: '#D97706' },
-      EN_ROUTE: { label: '📍 MARK ON SCENE', bg: '#7C3AED' },
-      ON_SCENE: { label: '🏥 COMPLETE EVACUATION', bg: '#16A34A' },
-      QUEUED: { label: res.assignedUnit ? '🚑 HANDLED BY ANOTHER UNIT' : '⏳ AWAITING MDRRMO DISPATCH', bg: '#64748B' },
-    };
-    return map[res.status] || { label: 'UPDATE STATUS', bg: '#1E3A8A' };
-  };
-
   const handleBroadcastHazard = async () => {
-    if (!hazardNote.trim()) return Alert.alert('Required', 'Please enter a tactical note.');
-    const ok = await run(() => reportHazard({
-      type: selectedHazard.id, description: hazardNote.trim(), lat: pendingCoords.lat, lng: pendingCoords.lng,
-    }), 'Hazard not sent');
+    if (!hazardNote.trim()) return Alert.alert('Required', 'Please add a short note.');
+    let newId = null;
+    const ok = await run(async () => {
+      newId = await reportHazard({
+        type: selectedHazard.id, description: hazardNote.trim(), lat: pendingCoords.lat, lng: pendingCoords.lng,
+      });
+    }, 'Hazard not sent');
     if (ok) {
       setPendingCoords(null);
       setHazardNote('');
+      if (newId) {
+        Alert.alert('Hazard reported ⚠️', 'Made a mistake? You can take it back now.', [
+          { text: 'Take it back', style: 'destructive', onPress: () => run(() => withdrawMyHazard(newId), 'Could not take it back') },
+          { text: 'OK' },
+        ]);
+      }
     }
   };
 
   const sheetBottomOffset = 64 + insets.bottom;
-  const activeSectorData = selectedBarangay
-    ? {
-        ...selectedBarangay,
-        isCached: Boolean(cachedSectors[selectedBarangay.name]),
-        cachedAt: cachedSectors[selectedBarangay.name]?.cachedAt,
-      }
-    : null;
-
-  const cachedBarangayNames = Object.keys(cachedSectors);
-  const availableResidents =
-    isOffline && cachedBarangayNames.length > 0
-      ? residents.filter((r) => cachedBarangayNames.includes(r.barangay))
-      : residents;
-
-  let displayedPins = availableResidents;
+  let displayedPins = residents;
   if (focusedResidentId) {
     displayedPins = residents.filter((r) => r.id === focusedResidentId);
   } else if (showActiveSosOnly) {
-    displayedPins = availableResidents.filter((r) => r.sosActive);
+    displayedPins = residents.filter((r) => r.sosActive);
   }
 
   const selectedDistFromHome = selectedResident
@@ -591,10 +542,10 @@ export default function RescuerMapScreen() {
             setForceOfflineSim(nextOffline);
             setIsOffline(nextOffline);
             Alert.alert(
-              nextOffline ? 'Offline Mode Activated 📡' : 'Online Sync Restored 🌐',
+              nextOffline ? 'Demo: offline view 📡' : 'Back online 🌐',
               nextOffline
-                ? `Using local precached tiles & snapshots (${cachedBarangayNames.length} sectors cached).`
-                : 'Reconnected to MDRRMO cloud server. Queued field packets synced.'
+                ? 'Showing the saved offline map and the last downloaded SOS, resident and hazard data. Tap again to go back online.'
+                : 'Showing live data again.'
             );
           }}
           activeOpacity={0.8}
@@ -603,27 +554,22 @@ export default function RescuerMapScreen() {
           <Text style={styles.statusText}>
             {isOffline
               ? 'OFFLINE • LAST KNOWN DATA'
+              : feed.error && feed.fromCache
+              ? `NO SIGNAL • SAVED DATA FROM ${lastSynced}`
               : feed.error
               ? 'SERVER UNREACHABLE • RETRYING'
               : feed.loading
-              ? 'LOADING FIELD FEED…'
-              : `SYNCED ${lastSynced} • ${residents.filter((r) => r.isMine).length} MY TICKETS`}
+              ? 'LOADING…'
+              : `SYNCED ${lastSynced} • ${residents.filter((r) => r.isMine).length} ASSIGNED TO ME`}
           </Text>
         </TouchableOpacity>
       </View>
-
-      {/* Live GPS sharing for the active mission */}
-      {tracker.ticketId && !selectedResident && (
-        <View style={[styles.gpsPill, { top: insets.top + 44 }]}>
-          <GpsStatusLine tracker={tracker} />
-        </View>
-      )}
 
       {/* Focused Incident Reset Banner */}
       {focusedResidentId && selectedResident && (
         <View style={[styles.focusBanner, { top: insets.top + 44 }]}>
           <Text style={styles.focusBannerText} numberOfLines={1}>
-            🎯 FOCUSED: {selectedResident.name.toUpperCase()}
+            🎯 SHOWING: {selectedResident.name.toUpperCase()}
           </Text>
           <TouchableOpacity
             style={styles.btnResetFocus}
@@ -637,17 +583,10 @@ export default function RescuerMapScreen() {
         </View>
       )}
 
-      {/* Active disaster declarations (web console) */}
-      <DisasterBanner
-        compact
-        events={feed.events}
-        style={{ position: 'absolute', left: 14, right: 14, zIndex: 20, top: insets.top + (focusedResidentId && selectedResident ? 84 : 44) }}
-      />
-
       {/* Mode Banners */}
       {isSettingSimGps && (
         <View style={[styles.dropBanner, { top: insets.top + 8, backgroundColor: '#0284C7' }]}>
-          <Text style={styles.dropBannerText}>🕹️ TAP MAP TO MOVE RESCUER GPS</Text>
+          <Text style={styles.dropBannerText}>🕹️ DEMO: TAP MAP TO SET YOUR LOCATION</Text>
           <TouchableOpacity onPress={() => setIsSettingSimGps(false)}>
             <Text style={styles.dropCancelText}>CANCEL</Text>
           </TouchableOpacity>
@@ -656,7 +595,7 @@ export default function RescuerMapScreen() {
 
       {isDroppingHazard && (
         <View style={[styles.dropBanner, { top: insets.top + 8 }]}>
-          <Text style={styles.dropBannerText}>📍 TAP MAP TO PIN HAZARD</Text>
+          <Text style={styles.dropBannerText}>📍 TAP THE MAP WHERE THE HAZARD IS</Text>
           <TouchableOpacity onPress={() => setIsDroppingHazard(false)}>
             <Text style={styles.dropCancelText}>CANCEL</Text>
           </TouchableOpacity>
@@ -673,7 +612,6 @@ export default function RescuerMapScreen() {
         gpsMode={gpsMode}
         isSettingSimGps={isSettingSimGps}
         triggerGpsQuery={triggerGpsQuery}
-        cachedSectors={cachedSectors}
         isOffline={isOffline}
         isDroppingHazard={isDroppingHazard}
         selectedBarangay={selectedBarangay}
@@ -691,19 +629,18 @@ export default function RescuerMapScreen() {
           setSelectedResident(null);
           setSelectedHazardPin(haz);
         }}
-        onBarangaySelect={(b) => {
-          setSelectedResident(null);
-          setSelectedHazardPin(null);
-          setSelectedBarangay(b);
-        }}
         onHazardCoordinateDrop={(coords) => {
           setIsDroppingHazard(false);
+          if (!isInCordova(coords.lat, coords.lng)) {
+            Alert.alert('Outside Cordova', OUTSIDE_CORDOVA_MESSAGE);
+            return;
+          }
           setPendingCoords(coords);
         }}
         onSimGpsCoordinateDrop={(coords) => {
           setIsSettingSimGps(false);
           setGpsMode('SIMULATED');
-          setRescuerGpsCoords(coords);
+          placeUnit(coords);
           setTriggerGpsQuery(Date.now());
         }}
         onGpsLocationFound={handleGpsLocationFound}
@@ -712,6 +649,7 @@ export default function RescuerMapScreen() {
           setSelectedBarangay(null);
           setSelectedResident(null);
           setSelectedHazardPin(null);
+          setFocusedResidentId(null); // closing a resident opened from the SOS list shows everything again
         }}
       />
 
@@ -729,8 +667,8 @@ export default function RescuerMapScreen() {
           >
             <Text style={[styles.floatingFilterText, showActiveSosOnly ? styles.filterTextSos : styles.filterTextAll]}>
               {showActiveSosOnly
-                ? `🚨 SOS (${availableResidents.filter((r) => r.sosActive).length})`
-                : `🌐 All (${availableResidents.length})`}
+                ? `🚨 SOS (${residents.filter((r) => r.sosActive).length})`
+                : `🌐 All (${residents.length})`}
             </Text>
           </TouchableOpacity>
 
@@ -755,25 +693,11 @@ export default function RescuerMapScreen() {
               }}
               activeOpacity={0.85}
             >
-              <Text style={styles.hazardFabText}>🚨 PIN HAZARD</Text>
+              <Text style={styles.hazardFabText}>🚨 REPORT HAZARD</Text>
             </TouchableOpacity>
           </View>
         </>
       )}
-
-      {/* Sector Detail Sheet */}
-      <SectorDetailSheet
-        barangay={activeSectorData}
-        residents={residents.filter((r) => r.barangay === selectedBarangay?.name)}
-        hazards={hazards.filter((h) => h.barangay === selectedBarangay?.name)}
-        onClose={() => setSelectedBarangay(null)}
-        onDownloadSuccess={handleDownloadSuccess}
-        onResidentSelect={(res) => {
-          setSelectedBarangay(null);
-          setSelectedResident(res);
-        }}
-        bottomOffset={sheetBottomOffset}
-      />
 
       {/* Controlled Hazard Bottom Sheet (Strict EOC Resolution + Undo) */}
       {selectedHazardPin && !selectedResident && !selectedBarangay && (
@@ -799,13 +723,18 @@ export default function RescuerMapScreen() {
                 )}
               </View>
               <Text style={styles.sheetSitio}>
-                Brgy. {selectedHazardPin.barangay} • 📍 {rescuerGpsCoords ? `${hazardDistFromRescuer}m from Unit` : 'waiting for GPS'}
+                Brgy. {selectedHazardPin.barangay} • 📍 {rescuerGpsCoords ? `${hazardDistFromRescuer} m from you` : 'waiting for GPS'}
               </Text>
               <Text style={styles.hazardDescriptionText}>{selectedHazardPin.description}</Text>
               <Text style={styles.reportedByText}>
                 Reported by {selectedHazardPin.reportedBy} ({selectedHazardPin.time})
                 {selectedHazardPin.verifiedBy ? ` • ${selectedHazardPin.verifiedBy}` : ''}
               </Text>
+              {selectedHazardPin.reporterContact && (
+                <TouchableOpacity onPress={() => Linking.openURL(`tel:${selectedHazardPin.reporterContact}`)} accessibilityRole="button">
+                  <Text style={styles.callReporterText}>📞 Call the reporter to check</Text>
+                </TouchableOpacity>
+              )}
             </View>
             <TouchableOpacity onPress={() => setSelectedHazardPin(null)}>
               <Text style={styles.closeBtn}>✕</Text>
@@ -820,13 +749,13 @@ export default function RescuerMapScreen() {
                   style={[styles.btnStatus, { backgroundColor: '#15803D', flex: 1.5 }]}
                   onPress={() => handleVerifySelectedHazard(selectedHazardPin)}
                 >
-                  <Text style={styles.btnStatusText}>✓ Verify On Scene</Text>
+                  <Text style={styles.btnStatusText}>✓ Yes, it's real</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.btnFalseReport, { flex: 1 }]}
                   onPress={() => handleFlagHazardFalse(selectedHazardPin)}
                 >
-                  <Text style={styles.btnFalseReportText}>✕ False Alarm</Text>
+                  <Text style={styles.btnFalseReportText}>✕ No, false report</Text>
                 </TouchableOpacity>
               </View>
             ) : selectedHazardPin.verificationStatus === 'CONFIRMED' ? (
@@ -841,8 +770,8 @@ export default function RescuerMapScreen() {
                 >
                   <Text style={styles.btnStatusText}>
                     {selectedHazardPin.clearanceRequested
-                      ? '⏳ CLEARANCE SENT • AWAITING EOC RESOLUTION'
-                      : '📡 RELAY OBSTRUCTION CLEARED TO EOC'}
+                      ? '⏳ CLEARED REPORT SENT • WAITING FOR MDRRMO'
+                      : '📡 MARK ROAD AS CLEARED'}
                   </Text>
                 </TouchableOpacity>
 
@@ -851,7 +780,7 @@ export default function RescuerMapScreen() {
                   style={styles.btnUndo}
                   onPress={() => handleUndoHazardVerification(selectedHazardPin)}
                 >
-                  <Text style={styles.btnUndoText}>↩️ Undo Verification / Revert Step</Text>
+                  <Text style={styles.btnUndoText}>↩️ Undo (back to not checked)</Text>
                 </TouchableOpacity>
               </View>
             ) : (
@@ -859,14 +788,14 @@ export default function RescuerMapScreen() {
               <View style={{ gap: 4 }}>
                 <View style={[styles.evacuatedBanner, { backgroundColor: '#F1F5F9' }]}>
                   <Text style={{ color: '#64748B', fontWeight: '900', fontSize: 10.5 }}>
-                    🚫 REPORTED AS FALSE ALARM • EOC REVIEW PENDING
+                    🚫 MARKED AS FALSE • WAITING FOR MDRRMO
                   </Text>
                 </View>
                 <TouchableOpacity
                   style={styles.btnUndo}
                   onPress={() => handleUndoHazardVerification(selectedHazardPin)}
                 >
-                  <Text style={styles.btnUndoText}>↩️ Undo / Revert to Unverified</Text>
+                  <Text style={styles.btnUndoText}>↩️ Undo (back to not checked)</Text>
                 </TouchableOpacity>
               </View>
             )}
@@ -882,11 +811,17 @@ export default function RescuerMapScreen() {
             { bottom: sheetBottomOffset, borderLeftColor: emergencyTheme.accentColor },
           ]}
         >
+          {!sheetMin && (<>
           {/* Row 1: Resident Name, Priority Badge, Distance & Dossier Pill */}
           <View style={styles.sheetHeader}>
             <View style={{ flex: 1, paddingRight: 8 }}>
               <View style={styles.nameRow}>
                 <Text style={styles.sheetName}>{selectedResident.name}</Text>
+                {selectedResident.accountUnverified && (
+                  <View style={styles.badgeUnverified}>
+                    <Text style={styles.badgeUnverifiedText}>ACCOUNT NOT VERIFIED</Text>
+                  </View>
+                )}
                 {isResidentCritical ? (
                   <View style={styles.badgeCritical}>
                     <Text style={styles.badgeCriticalText}>🚨 CRITICAL</Text>
@@ -908,7 +843,7 @@ export default function RescuerMapScreen() {
               >
                 <Text style={styles.btnDossierPillText}>👥 {totalSouls} • Info ➔</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => setSelectedResident(null)} hitSlop={8}>
+              <TouchableOpacity onPress={() => { setSelectedResident(null); setFocusedResidentId(null); }} hitSlop={8}>
                 <Text style={styles.closeBtn}>✕</Text>
               </TouchableOpacity>
             </View>
@@ -930,7 +865,7 @@ export default function RescuerMapScreen() {
             ) : (
               <View style={[styles.distinctEmergencyBadge, { backgroundColor: '#F1F5F9', borderColor: '#E2E8F0' }]}>
                 <Text style={[styles.distinctEmergencyText, { color: '#64748B' }]}>
-                  🏠 STANDBY REGISTERED
+                  🏠 NO SOS
                 </Text>
               </View>
             )}
@@ -941,19 +876,29 @@ export default function RescuerMapScreen() {
               </Text>
               {selectedDistFromHome > 35 ? (
                 <Text style={styles.displacedNoticeText}>
-                  🏃 Displaced ({selectedDistFromHome}m from home)
+                  🏃 Away from home ({selectedDistFromHome}m)
                 </Text>
               ) : (
                 <Text style={styles.atHomeNoticeText}>
-                  🏠 At registered residence
+                  🏠 At home
                 </Text>
               )}
             </View>
           </View>
 
-          {/* Row 3: Tactical Gear & Landmark Card */}
+          {/* Row 3: What to bring & landmark */}
           <View style={styles.tacticalInfoBox}>
             <View style={{ flex: 1, paddingRight: 6 }}>
+              {selectedResident.isMine && (
+                <Text style={styles.tacticalNoteText} numberOfLines={3}>
+                  📝 {selectedResident.note
+                    ? <Text style={{ fontWeight: '800', color: '#0F172A' }}>"{selectedResident.note}"</Text>
+                    : <Text style={{ fontStyle: 'italic', color: '#94A3B8' }}>No note from the resident</Text>}
+                </Text>
+              )}
+              {selectedResident.instructions ? (
+                <Text style={styles.tacticalNoteText} numberOfLines={2}>📋 MDRRMO: {selectedResident.instructions}</Text>
+              ) : null}
               <Text style={styles.tacticalGearText}>
                 🎒 <Text style={{ fontWeight: '900', color: '#0F172A' }}>{selectedResident.requiredGear}</Text>
               </Text>
@@ -964,37 +909,26 @@ export default function RescuerMapScreen() {
               ) : null}
             </View>
 
-            {selectedResident.sosActive && selectedResident.status !== 'EVACUATED' && !selectedResident.supportRequest && (
-              <TouchableOpacity
-                style={styles.btnMiniBackup}
-                onPress={() => setSupportModalVisible(true)}
-              >
-                <Text style={styles.btnMiniBackupText}>+ Backup</Text>
-              </TouchableOpacity>
-            )}
           </View>
 
-          {/* Active Requisition Strip */}
-          {selectedResident.supportRequest && (
-            <View style={styles.supportBanner}>
+          {/* Backup requests (open ones, saved in the database) */}
+          {selectedResident.backups?.map((b) => (
+            <View key={b.request_id} style={styles.supportBanner}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.supportBannerType} numberOfLines={1}>
-                  📡 {selectedResident.supportRequest.type}
+                  📡 Backup asked: {BACKUP_NEEDS[b.need]?.icon} {BACKUP_NEEDS[b.need]?.label || b.need}
                 </Text>
               </View>
-              <View style={{ flexDirection: 'row', gap: 6 }}>
-                <TouchableOpacity onPress={() => setSupportModalVisible(true)}>
-                  <Text style={styles.btnSupportChangeText}>Change</Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => handleCancelSupportRequest(selectedResident)}>
-                  <Text style={styles.btnSupportCancelText}>Cancel</Text>
-                </TouchableOpacity>
-              </View>
+              <TouchableOpacity onPress={() => handleCancelSupportRequest(b)}>
+                <Text style={styles.btnSupportCancelText}>Cancel</Text>
+              </TouchableOpacity>
             </View>
-          )}
+          ))}
 
-          {/* Row 4: Primary CAD Action */}
-          <View style={{ marginTop: 8 }}>
+          </>)}
+
+          {/* Row 4: Main action */}
+          <View style={{ marginTop: sheetMin ? 0 : 8 }}>
             {!selectedResident.sosActive ? (
               <TouchableOpacity
                 style={styles.btnPreEmptive}
@@ -1013,20 +947,23 @@ export default function RescuerMapScreen() {
               </View>
             ) : (
               <>
-                {selectedResident.sosCancelled && (
+                {selectedResident.sosCancelled && !sheetMin && (
                   <View style={[styles.evacuatedBanner, { backgroundColor: '#FEF3C7', marginBottom: 6 }]}>
                     <Text style={{ color: '#B45309', fontWeight: '900', fontSize: 10.5 }}>
-                      ⚠️ RESIDENT CANCELLED THE SOS ({String(selectedResident.cancelReason || '').replace('_', ' ').toUpperCase()}) • CHECK ON SCENE, THEN CLOSE
+                      ⚠️ RESIDENT CANCELLED THE SOS ({String(selectedResident.cancelReason || '').replace('_', ' ').toUpperCase()}) • CHECK ON SITE, THEN CLOSE
                     </Text>
                   </View>
                 )}
-                {selectedResident.isMine && selectedResident.ticketId &&
-                  ['ACCEPTED', 'EN_ROUTE', 'ON_SCENE'].includes(selectedResident.status) && (
-                  <MissionPanel
+                {selectedResident.isMine && selectedResident.ticketId ? (
+                  <RescueCard
                     key={selectedResident.ticketId}
                     res={selectedResident}
-                    tracker={tracker}
+                    unitPos={positionKnown ? rescuerGpsCoords : null}
+                    compact={sheetMin}
+                    onCompact={setSheetMin}
                     onTarget={setMissionTarget}
+                    onBackup={() => setSupportModalVisible(true)}
+                    onInfo={() => setDossierModalVisible(true)}
                     onClosed={() => {
                       setMissionTarget(null);
                       feed.reload();
@@ -1034,46 +971,12 @@ export default function RescuerMapScreen() {
                       setFocusedResidentId(null);
                     }}
                   />
-                )}
-                {selectedResident.status === 'ON_SCENE' && selectedResident.isMine && (
-                  <View style={{ flexDirection: 'row', gap: 6, marginBottom: 6 }}>
-                    {!selectedResident.verifiedBy && (
-                      <TouchableOpacity
-                        style={[styles.btnStatus, { backgroundColor: '#15803D', flex: 1.5 }]}
-                        onPress={() => handleManualVerifyOnScene(selectedResident)}
-                      >
-                        <Text style={styles.btnStatusText}>✓ Confirm On-Scene</Text>
-                      </TouchableOpacity>
-                    )}
-                    <TouchableOpacity
-                      style={[styles.btnFalseReport, { flex: 1 }]}
-                      onPress={() => handleLogFalseReport(selectedResident)}
-                    >
-                      <Text style={styles.btnFalseReportText}>🚫 False Alarm</Text>
-                    </TouchableOpacity>
+                ) : (
+                  <View style={[styles.evacuatedBanner, { backgroundColor: '#F1F5F9' }]}>
+                    <Text style={{ color: '#475569', fontWeight: '900', fontSize: 11 }}>
+                      {selectedResident.assignedUnit ? '🚑 HANDLED BY ANOTHER UNIT' : '⏳ WAITING FOR THE MDRRMO TO ASSIGN A UNIT'}
+                    </Text>
                   </View>
-                )}
-
-                {!(missionTarget && selectedResident.status === 'ON_SCENE') && (
-                <TouchableOpacity
-                  style={[styles.btnStatus, { backgroundColor: getBtnConfig(selectedResident)?.bg }]}
-                  onPress={() => handleAdvanceStatus(selectedResident)}
-                  activeOpacity={0.85}
-                  disabled={busy}
-                >
-                  {busy ? <ActivityIndicator color="#FFF" /> : (
-                    <Text style={styles.btnStatusText}>{getBtnConfig(selectedResident)?.label}</Text>
-                  )}
-                </TouchableOpacity>
-                )}
-
-                {selectedResident.isMine && selectedResident.status !== 'PENDING' && (
-                  <TouchableOpacity
-                    style={styles.btnUndo}
-                    onPress={() => handleUndoStatus(selectedResident)}
-                  >
-                    <Text style={styles.btnUndoText}>↩️ Logged a step by mistake?</Text>
-                  </TouchableOpacity>
                 )}
               </>
             )}
@@ -1081,13 +984,13 @@ export default function RescuerMapScreen() {
         </View>
       )}
 
-      {/* Household Intelligence Dossier Modal */}
+      {/* Household details modal */}
       <Modal visible={dossierModalVisible} transparent animationType="slide">
         <View style={styles.dossierBackdrop}>
           <View style={[styles.dossierCard, { maxHeight: '88%' }]}>
             <View style={styles.dossierHeaderRow}>
               <View style={{ flex: 1, paddingRight: 8 }}>
-                <Text style={styles.dossierSuperTitle}>HOUSEHOLD INTELLIGENCE DOSSIER</Text>
+                <Text style={styles.dossierSuperTitle}>HOUSEHOLD DETAILS</Text>
                 <Text style={styles.dossierName}>{selectedResident?.name}</Text>
                 <Text style={styles.dossierSubLocation}>
                   Brgy. {selectedResident?.barangay} • {selectedResident?.sitio}
@@ -1111,18 +1014,22 @@ export default function RescuerMapScreen() {
                   </View>
                 )}
                 <View style={styles.landmarkBanner}>
-                  <Text style={styles.landmarkBannerTitle}>🚩 PERMANENT RESIDENCE LANDMARK:</Text>
+                  <Text style={styles.landmarkBannerTitle}>🚩 LANDMARK:</Text>
                   <Text style={styles.landmarkBannerText}>
-                    {selectedResident?.landmark || 'No specific physical landmark registered.'}
+                    {selectedResident?.landmark || 'No landmark given.'}
                   </Text>
                 </View>
               </View>
 
-              <Text style={styles.dossierSecHeader}>HOUSEHOLD COMPOSITION & VULNERABILITIES</Text>
+              {selectedResident?.sosActive && (
+                <SosDetails res={selectedResident} style={{ marginBottom: 12 }} />
+              )}
+
+              <Text style={styles.dossierSecHeader}>WHO LIVES HERE</Text>
               <View style={styles.tallyGrid}>
                 <View style={[styles.tallyBox, { borderColor: '#BFDBFE', backgroundColor: '#EFF6FF' }]}>
                   <Text style={[styles.tallyNum, { color: '#1E3A8A' }]}>{totalSouls}</Text>
-                  <Text style={styles.tallyLabel}>TOTAL SOULS</Text>
+                  <Text style={styles.tallyLabel}>PEOPLE</Text>
                 </View>
                 <View style={[styles.tallyBox, { borderColor: '#BBF7D0', backgroundColor: '#F0FDF4' }]}>
                   <Text style={[styles.tallyNum, { color: '#16A34A' }]}>{childCount}</Text>
@@ -1141,27 +1048,27 @@ export default function RescuerMapScreen() {
               {pregnantCount > 0 && (
                 <View style={styles.pregnantAlertBadge}>
                   <Text style={styles.pregnantAlertText}>
-                    🤰 Maternal Care: {pregnantCount} Expectant Mother(s) in Household
+                    🤰 {pregnantCount} pregnant member(s)
                   </Text>
                 </View>
               )}
 
-              <Text style={[styles.dossierSecHeader, { marginTop: 12 }]}>STRUCTURE & LOCATION TELEMETRY</Text>
+              <Text style={[styles.dossierSecHeader, { marginTop: 12 }]}>HOUSE & LOCATION</Text>
               <View style={styles.infoRowCard}>
                 <View style={styles.infoItem}>
-                  <Text style={styles.infoItemLabel}>STRUCTURE</Text>
+                  <Text style={styles.infoItemLabel}>HOUSE TYPE</Text>
                   <Text style={styles.infoItemValue}>{[selectedResident?.houseType, selectedResident?.floorLevel].filter(Boolean).join(' • ') || '—'}</Text>
                 </View>
                 <View style={styles.infoDivider} />
                 <View style={styles.infoItem}>
-                  <Text style={styles.infoItemLabel}>VPI RATING</Text>
+                  <Text style={styles.infoItemLabel}>PRIORITY SCORE</Text>
                   <Text style={[styles.infoItemValue, { color: '#DC2626' }]}>
                     {selectedResident?.vpiScore || 65} ({selectedResident?.priority || 'NORMAL'})
                   </Text>
                 </View>
                 <View style={styles.infoDivider} />
                 <View style={styles.infoItem}>
-                  <Text style={styles.infoItemLabel}>ROOFTOP GPS</Text>
+                  <Text style={styles.infoItemLabel}>HOME GPS</Text>
                   <Text style={styles.infoItemValue}>
                     {selectedResident?.homeLat?.toFixed(4)}, {selectedResident?.homeLng?.toFixed(4)}
                   </Text>
@@ -1179,7 +1086,7 @@ export default function RescuerMapScreen() {
               </View>
 
               <Text style={[styles.dossierSecHeader, { marginTop: 12 }]}>
-                INDIVIDUAL RESIDENT ROSTER ({totalSouls} MEMBERS)
+                HOUSEHOLD MEMBERS ({totalSouls})
               </Text>
               <View style={{ gap: 6, marginBottom: 14 }}>
                 {dossierMembers.map((member, idx) => (
@@ -1219,7 +1126,7 @@ export default function RescuerMapScreen() {
               style={styles.btnCloseDossierModal}
               onPress={() => setDossierModalVisible(false)}
             >
-              <Text style={styles.btnCloseDossierModalText}>Close Dossier</Text>
+              <Text style={styles.btnCloseDossierModalText}>Close</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1229,57 +1136,26 @@ export default function RescuerMapScreen() {
       <Modal visible={supportModalVisible} transparent animationType="fade">
         <View style={styles.modalBackdrop}>
           <View style={styles.dialog}>
-            <Text style={[styles.dialogTitle, { color: '#DC2626' }]}>
-              {selectedResident?.supportRequest ? '✏️ CHANGE SUPPORT REQUISITION' : '🚨 REQUEST BACKUP & REINFORCEMENTS'}
-            </Text>
+            <Text style={[styles.dialogTitle, { color: '#DC2626' }]}>🚨 REQUEST BACKUP</Text>
             <Text style={styles.checkInSub}>
-              Transmits standardized telemetry to MDRRMO EOC without congesting radio channels:
+              The MDRRMO sees this on the website and sends help.
             </Text>
 
             <View style={{ gap: 8, marginVertical: 12 }}>
-              <TouchableOpacity
-                style={[
-                  styles.optBtn,
-                  selectedResident?.supportRequest?.type?.includes('WASAR') && styles.optBtnActive,
-                ]}
-                onPress={() => handleSendSupportRequest('WASAR Inflatable Rescue Boat (Surge/Deep Flood)')}
-              >
-                <Text style={styles.optTitle}>🚤 Request WASAR Rescue Boat Unit</Text>
-                <Text style={styles.optDesc}>Dispatches coastal boat for water depths exceeding 1 meter.</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[
-                  styles.optBtn,
-                  selectedResident?.supportRequest?.type?.includes('Ambulance') && styles.optBtnActive,
-                ]}
-                onPress={() => handleSendSupportRequest('Additional Ambulance & Paramedic Unit (ALS)')}
-              >
-                <Text style={styles.optTitle}>🚑 Request Secondary Ambulance</Text>
-                <Text style={styles.optDesc}>For multiple casualties or severe medical stabilization.</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[
-                  styles.optBtn,
-                  selectedResident?.supportRequest?.type?.includes('Long Spine') && styles.optBtnActive,
-                ]}
-                onPress={() => handleSendSupportRequest('Long Spine Board (LSB) + Cervical Collar Pack')}
-              >
-                <Text style={styles.optTitle}>🪵 Request Long Spine Board (LSB)</Text>
-                <Text style={styles.optDesc}>Rigid stretcher needed for bedridden or trauma extraction.</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[
-                  styles.optBtn,
-                  selectedResident?.supportRequest?.type?.includes('Chainsaw') && styles.optBtnActive,
-                ]}
-                onPress={() => handleSendSupportRequest('BFP / Chainsaw Road Clearing Team')}
-              >
-                <Text style={styles.optTitle}>🪓 Request Chainsaw & Obstacle Clearing</Text>
-                <Text style={styles.optDesc}>Downed tree or heavy debris blocking entry path.</Text>
-              </TouchableOpacity>
+              {Object.entries(BACKUP_NEEDS).map(([need, info]) => {
+                const asked = selectedResident?.backups?.some((b) => b.need === need);
+                return (
+                  <TouchableOpacity
+                    key={need}
+                    style={[styles.optBtn, asked && styles.optBtnActive]}
+                    disabled={asked || busy}
+                    onPress={() => handleSendSupportRequest(need)}
+                  >
+                    <Text style={styles.optTitle}>{info.icon} {info.label}{asked ? ' (already asked)' : ''}</Text>
+                    <Text style={styles.optDesc}>{info.desc}</Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
 
             <TouchableOpacity style={styles.btnCancel} onPress={() => setSupportModalVisible(false)}>
@@ -1293,9 +1169,9 @@ export default function RescuerMapScreen() {
       <Modal visible={gpsModalVisible} transparent animationType="fade">
         <View style={styles.modalBackdrop}>
           <View style={styles.dialog}>
-            <Text style={[styles.dialogTitle, { color: '#0284C7' }]}>🚑 RESCUER GPS TELEMETRY MODE</Text>
+            <Text style={[styles.dialogTitle, { color: '#0284C7' }]}>📍 YOUR LOCATION</Text>
             <Text style={styles.checkInSub}>
-              Switch between hardware GPS and simulated coordinates:
+              Use the phone's GPS, or a demo location for testing:
             </Text>
 
             <View style={{ gap: 8, marginVertical: 12 }}>
@@ -1309,10 +1185,10 @@ export default function RescuerMapScreen() {
                 }}
               >
                 <Text style={{ fontWeight: '900', fontSize: 12.5, color: '#0F172A' }}>
-                  🛰️ Use Real-Time Hardware GPS
+                  🛰️ Use phone GPS
                 </Text>
                 <Text style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>
-                  Locks onto device satellite sensors continuously.
+                  Your real location.
                 </Text>
               </TouchableOpacity>
 
@@ -1327,10 +1203,10 @@ export default function RescuerMapScreen() {
                 }}
               >
                 <Text style={{ fontWeight: '900', fontSize: 12.5, color: '#0284C7' }}>
-                  👆 Tap Map to Place Rescuer Unit
+                  👆 Demo: tap the map to set location
                 </Text>
                 <Text style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>
-                  Set simulated position anywhere on the field map.
+                  For testing only. Not your real location.
                 </Text>
               </TouchableOpacity>
 
@@ -1338,13 +1214,13 @@ export default function RescuerMapScreen() {
                 style={styles.optBtn}
                 onPress={() => {
                   setGpsMode('SIMULATED');
-                  setRescuerGpsCoords({ lat: 10.2536, lng: 123.9512 });
+                  placeUnit({ lat: 10.2536, lng: 123.9512 });
                   setGpsModalVisible(false);
                   setTriggerGpsQuery(Date.now());
                 }}
               >
                 <Text style={{ fontWeight: '800', fontSize: 12, color: '#1E293B' }}>
-                  🕹️ Preset: Poblacion Command Post
+                  🕹️ Demo: Poblacion command post
                 </Text>
               </TouchableOpacity>
               </>)}
@@ -1361,8 +1237,8 @@ export default function RescuerMapScreen() {
       <Modal visible={checkInModalVisible} transparent animationType="slide">
         <View style={styles.modalBackdrop}>
           <View style={styles.dialog}>
-            <Text style={[styles.dialogTitle, { color: '#1E3A8A' }]}>🏥 SHELTER GATE CHECK-IN</Text>
-            <Text style={styles.checkInSub}>Shelter the household was brought to:</Text>
+            <Text style={[styles.dialogTitle, { color: '#1E3A8A' }]}>🏥 CHECK IN AT CENTRE</Text>
+            <Text style={styles.checkInSub}>Centre the household was brought to:</Text>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
               {feed.centers.map((c) => (
                 <TouchableOpacity
@@ -1389,7 +1265,7 @@ export default function RescuerMapScreen() {
                     onPress={() => toggleMemberCheck(m.id)}
                   >
                     <Text style={{ fontWeight: '800', fontSize: 12.5, color: isChecked ? '#15803D' : '#B91C1C' }}>
-                      {isChecked ? '☑️ ADMITTED: ' : '⚠️ UNACCOUNTED: '} {m.name} ({m.role})
+                      {isChecked ? '☑️ CHECKED IN: ' : '⚠️ NOT WITH US: '} {m.name} ({m.role})
                     </Text>
                   </TouchableOpacity>
                 );
@@ -1411,7 +1287,7 @@ export default function RescuerMapScreen() {
       <Modal visible={Boolean(pendingCoords)} transparent animationType="slide">
         <View style={styles.modalBackdrop}>
           <View style={styles.dialog}>
-            <Text style={styles.dialogTitle}>BROADCAST FIELD HAZARD</Text>
+            <Text style={styles.dialogTitle}>REPORT A HAZARD</Text>
             <View style={{ gap: 6, marginVertical: 10 }}>
               {HAZARD_OPTIONS.map((opt) => (
                 <TouchableOpacity
@@ -1423,11 +1299,11 @@ export default function RescuerMapScreen() {
                 </TouchableOpacity>
               ))}
             </View>
-            <TextInput style={styles.input} placeholder="Tactical description..." value={hazardNote} onChangeText={setHazardNote} />
+            <TextInput style={styles.input} placeholder="Short description..." value={hazardNote} onChangeText={setHazardNote} />
             <View style={{ flexDirection: 'row', gap: 8 }}>
               <TouchableOpacity style={styles.btnCancel} onPress={() => setPendingCoords(null)}><Text>Cancel</Text></TouchableOpacity>
               <TouchableOpacity style={styles.btnSubmit} onPress={handleBroadcastHazard} disabled={busy}>
-                {busy ? <ActivityIndicator color="#FFF" /> : <Text style={{ color: '#FFF', fontWeight: '800' }}>Broadcast</Text>}
+                {busy ? <ActivityIndicator color="#FFF" /> : <Text style={{ color: '#FFF', fontWeight: '800' }}>Send</Text>}
               </TouchableOpacity>
             </View>
           </View>
@@ -1662,6 +1538,7 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     marginTop: 3,
   },
+  tacticalNoteText: { fontSize: 12.5, color: '#334155', marginBottom: 3 },
   tacticalGearText: {
     fontSize: 11,
     color: '#475569',
@@ -1780,6 +1657,9 @@ const styles = StyleSheet.create({
   verifBadgeUnverified: { backgroundColor: '#FFFBEB', borderColor: '#D97706' },
   verifTextUnverified: { color: '#B45309', fontSize: 9, fontWeight: '900' },
   hazardDescriptionText: { fontSize: 11.5, color: '#0F172A', fontWeight: '700', marginTop: 3 },
+  callReporterText: { fontSize: 12, color: '#1D4ED8', fontWeight: '800', marginTop: 6 },
+  badgeUnverified: { backgroundColor: '#FEF3C7', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2, marginLeft: 6 },
+  badgeUnverifiedText: { fontSize: 9.5, fontWeight: '800', color: '#B45309' },
   reportedByText: { fontSize: 9.5, color: '#64748B', marginTop: 2 },
 
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', padding: 18 },

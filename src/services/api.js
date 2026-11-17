@@ -1,6 +1,7 @@
 // Every call the app makes to Supabase, plus the mapping between the app's
 // labels and the database's values. Screens import from here only.
 import { File } from 'expo-file-system';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../lib/supabase';
 
 // ---------------------------------------------------------------
@@ -113,7 +114,11 @@ async function assertRole(role) {
   return profile;
 }
 
-export const signOut = () => supabase.auth.signOut();
+// Signing out also removes the responder's saved offline copy of residents (rescuerFeed.js).
+export const signOut = async () => {
+  await AsyncStorage.removeItem('pc.rescuerFeed.v1').catch(() => {});
+  return supabase.auth.signOut();
+};
 export const getMyProfile = () => call(supabase.rpc('get_my_profile'));
 
 // ---------------------------------------------------------------
@@ -211,10 +216,30 @@ export async function signedPhotoUrl(bucket, path) {
 // ---------------------------------------------------------------
 
 export const getMySos = () => call(supabase.rpc('get_my_sos'));
-export const raiseSos = (type, coords, note = '') =>
-  call(supabase.rpc('raise_sos', { p_type: type, p_lat: coords?.lat ?? null, p_lng: coords?.lng ?? null, p_note: note }));
+// who: { headcount, withMembers } -- how many people are with the resident in total (1-50) and
+// which household members (member_ids). Falls back to older database versions if STEP29/30 aren't applied.
+export async function raiseSos(type, coords, note = '', who = {}) {
+  const args = { p_type: type, p_lat: coords?.lat ?? null, p_lng: coords?.lng ?? null, p_note: note };
+  const tries = [];
+  if (who.headcount && who.withMembers) tries.push({ ...args, p_headcount: who.headcount, p_with_members: who.withMembers });
+  if (who.headcount) tries.push({ ...args, p_headcount: who.headcount });
+  for (const a of tries) {
+    const { data, error } = await supabase.rpc('raise_sos', a);
+    if (!error) return data;
+    if (!/p_headcount|p_with_members|could not find the function|raise_sos/i.test(error.message || '')) throw new Error(friendly(error));
+  }
+  return call(supabase.rpc('raise_sos', args));
+}
 // reason: 'self_evacuated' | 'threat_receded' | 'accidental'
 export const cancelSos = (reason) => call(supabase.rpc('cancel_my_sos', { p_reason: reason }));
+// STEP30: per ticket, whether the resident ticked who is with them on the SOS, and who.
+// Returns {} if STEP30 isn't applied, so the whole household is used as before.
+export async function getTicketSosMembers(ticketIds) {
+  const ids = (ticketIds || []).filter(Boolean);
+  if (!ids.length) return {};
+  const { data, error } = await supabase.rpc('get_ticket_sos_members', { p_ticket_ids: ids });
+  return error ? {} : data || {};
+}
 export const getHouseholdStatus = () => call(supabase.rpc('get_my_household_status'));
 export const setMemberMissing = (memberId, missing, note = '') =>
   call(supabase.rpc('set_my_member_missing', { p_member_id: memberId, p_missing: missing, p_note: note }));
@@ -227,6 +252,18 @@ export const reportMyPreemptive = ({ status, destinationType = null, centerId = 
     p_status: status, p_destination_type: destinationType, p_center_id: centerId,
     p_destination_address: address, p_headcount: headcount, p_note: note,
   }));
+// Check out of an evacuation centre (STEP 28). people: uids / member_ids leaving, or null for everyone.
+// Before STEP 28 is run, "everyone" still works through the household's "Back home" report.
+export async function checkOutMyHousehold(people = null) {
+  try {
+    return await call(supabase.rpc('check_out_my_household', { p_people: people }));
+  } catch (e) {
+    if (people == null && /check_out_my_household|could not find the function/i.test(e.message)) {
+      return reportMyPreemptive({ status: 'returned_home', note: 'Checked out in the app' });
+    }
+    throw e;
+  }
+}
 export async function setMyHousePhoto(asset) {
   const path = await uploadImage('house-facades', 'front', asset);
   await call(supabase.rpc('set_my_house_photo', { p_path: path }));
@@ -261,8 +298,29 @@ export const recordEvacuation = (person, centerId, status) =>
     p_member_id: person.kind === 'member' ? person.member_id : null,
     p_center_id: centerId ?? null, p_status: status,
   }));
-// Family reunification lookup across shelters (rescuers and staff). Needs the step 4 SQL.
-export const searchEvacuees = (name) => call(supabase.rpc('search_field_evacuees', { p_query: name }));
+// Backup requests (STEP 20): the assigned unit asks for extra help; the web shows them.
+export const BACKUP_NEEDS = {
+  boat: { icon: '🚤', label: 'Rescue boat', desc: 'For flood water deeper than 1 metre.' },
+  ambulance: { icon: '🚑', label: 'Ambulance', desc: 'For several injured people or a serious case.' },
+  stretcher: { icon: '🛏️', label: 'Stretcher / spine board', desc: 'For bedridden or badly injured people.' },
+  road_clearing: { icon: '🪓', label: 'Road clearing', desc: 'A fallen tree or debris is blocking the way.' },
+  more_people: { icon: '👥', label: 'More responders', desc: 'Too many people to carry or guide.' },
+};
+export const getBackupRequests = () => call(supabase.rpc('get_backup_requests'));
+export const requestBackup = (ticketId, need, note = '') =>
+  call(supabase.rpc('request_backup', { p_ticket_id: ticketId, p_need: need, p_note: note }));
+export const cancelBackupRequest = (requestId) =>
+  call(supabase.rpc('close_backup_request', { p_request_id: requestId, p_action: 'cancel' }));
+
+// Hazard alarms (STEP 20): "I see it too" from people within 1 km, and the alarm level
+// (1 + confirmations + other reports of the same type within 300 m).
+export const getHazardAlarms = () => call(supabase.rpc('get_hazard_alarms'));
+export const confirmHazard = (hazardId, coords) =>
+  call(supabase.rpc('confirm_hazard', { p_hazard_id: hazardId, p_lat: coords?.lat ?? null, p_lng: coords?.lng ?? null }));
+export const getNearbyHazards = (coords) =>
+  call(supabase.rpc('get_nearby_hazards', { p_lat: coords.lat, p_lng: coords.lng }));
+export const alarmLabel = (level) => (level >= 3 ? '3rd alarm' : level === 2 ? '2nd alarm' : '1st alarm');
+
 export const admitWalkIn = ({ centerId, name, barangayId = null, sitio = '', headcount = 1, needs = '' }) =>
   call(supabase.rpc('admit_walk_in', {
     p_center_id: centerId, p_name: name, p_barangay_id: barangayId, p_sitio: sitio,
@@ -270,16 +328,14 @@ export const admitWalkIn = ({ centerId, name, barangayId = null, sitio = '', hea
   }));
 
 // ---------------------------------------------------------------
-// Live rescue missions (needs 20261116_01_live_rescue_tracking.sql)
+// Rescue missions: arrival, evacuation center, check-in (needs 20261116_01_live_rescue_tracking.sql).
+// The unit's live position is no longer sent (status updates only, to save battery).
 // ---------------------------------------------------------------
 
-// points: [{ lat, lng, accuracy, heading, speed, recorded_at }] (offline fixes are sent in one batch)
-export const reportUnitLocation = (ticketId, points) =>
-  call(supabase.rpc('report_unit_location', { p_ticket_id: ticketId, p_points: points }));
 export const getMissionStatus = (ticketId) => call(supabase.rpc('get_mission_status', { p_ticket_id: ticketId }));
 export const getMyRescueTracking = () => call(supabase.rpc('get_my_rescue_tracking'));
 export const getCenterAvailability = () => call(supabase.rpc('get_center_availability'));
-// Rescuer confirms arrival at the resident (manual, also suggested by GPS proximity).
+// Rescuer confirms arrival at the resident (the resident is told).
 export const confirmResidentLocated = (ticketId, fix) =>
   call(supabase.rpc('confirm_resident_located', {
     p_ticket_id: ticketId, p_lat: fix?.lat ?? null, p_lng: fix?.lng ?? null, p_accuracy: fix?.accuracy ?? null,
@@ -297,16 +353,6 @@ export const releaseEvacuationReservation = (ticketId, reason) =>
   call(supabase.rpc('release_evacuation_reservation', { p_ticket_id: ticketId, p_reason: reason }));
 export const confirmEvacuationArrival = (ticketId, note = '') =>
   call(supabase.rpc('confirm_evacuation_arrival', { p_ticket_id: ticketId, p_note: note }));
-
-// Streams one unit's live position (row-level security limits who receives it).
-export function subscribeUnitLocation(unitId, onRow) {
-  const channel = supabase
-    .channel(`pc-unit-location-${unitId}-${Date.now()}`)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'rescue_unit_locations', filter: `unit_id=eq.${unitId}` },
-      (payload) => { if (payload.new) onRow(payload.new); })
-    .subscribe();
-  return () => { supabase.removeChannel(channel); };
-}
 
 // ---------------------------------------------------------------
 // Live updates: calls onChange whenever a row the user can see changes.
@@ -337,3 +383,68 @@ export function onLiveSignal(topics, onChange) {
     .subscribe();
   return () => { clearTimeout(timer); supabase.removeChannel(channel); };
 }
+
+// Closed hazard reports (resolved or marked false) for the responder Hazards "History" filter.
+export async function getHazardHistory(limit = 50) {
+  const { data, error } = await supabase
+    .from('hazard_reports')
+    .select('hazard_id, hazard_type, description, status, latitude, longitude, barangay_id, photo_path, reporter_role, created_at, reviewed_at, review_note')
+    .in('status', ['resolved', 'dismissed'])
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return data || [];
+}
+
+// Hazards this resident reported, with what happened to each (resident Hazards screen, "My reports").
+export async function getMyHazardReports(limit = 30) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return [];
+  const { data, error } = await supabase
+    .from('hazard_reports')
+    .select('hazard_id, hazard_type, description, status, latitude, longitude, barangay_id, created_at, reviewed_at, review_note, event_id')
+    .eq('reported_by', user.id)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return data || [];
+}
+
+// Take back your own hazard report (misclick or mistake) while nobody has confirmed it yet (STEP22).
+export const withdrawMyHazard = (hazardId) =>
+  call(supabase.rpc('withdraw_my_hazard', { p_hazard_id: hazardId }));
+
+// Take back an "I see it too" (misclick), STEP23.
+export const unconfirmHazard = (hazardId) =>
+  call(supabase.rpc('unconfirm_hazard', { p_hazard_id: hazardId }));
+
+// Who reported each hazard: name, role and number, for responders and staff only (STEP24).
+// Returns {} when STEP24 is not run yet, so screens fall back to "Resident" / "Responder".
+export async function getHazardReporters(ids) {
+  if (!ids?.length) return {};
+  const { data, error } = await supabase.rpc('get_hazard_reporters', { p_ids: ids });
+  if (error) return {};
+  return Object.fromEntries((data || []).map((r) => [r.hazard_id, r]));
+}
+
+const ROLE_WORD = { resident: 'Resident', rescuer: 'Responder' };
+// "Juan Dela Cruz (Resident) • 0917…" or just "Resident" when the name is not known.
+export function reporterLabel(role, who) {
+  const word = ROLE_WORD[role] || 'MDRRMO staff';
+  const unverified = who?.reporter_verified === false ? ' • account not verified' : '';
+  if (!who?.reporter_name) return word + unverified;
+  return `${who.reporter_name} (${word})${who.contact_no ? ` • ${who.contact_no}` : ''}${unverified}`;
+}
+
+// Residents whose account the barangay has not verified yet (responders can read resident accounts).
+export async function getUnverifiedResidents(uids) {
+  const ids = [...new Set((uids || []).filter(Boolean))];
+  if (!ids.length) return [];
+  const { data, error } = await supabase.from('users').select('uid, is_verified').in('uid', ids);
+  if (error) return [];
+  return (data || []).filter((u) => !u.is_verified).map((u) => u.uid);
+}
+
+// Ended disasters, newest first (STEP27). Residents get their own barangay; responders all of Cordova.
+export const getDisasterHistory = (limit = 30) =>
+  call(supabase.rpc('get_disaster_history', { p_limit: limit }));

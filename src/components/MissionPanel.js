@@ -1,5 +1,5 @@
 // Rescuer's mission card inside the resident sheet. The mission goes:
-//   on the way -> CONFIRM ARRIVAL AT RESIDENT (GPS suggests it, the rescuer confirms)
+//   on the way -> CONFIRM ARRIVAL AT RESIDENT (the rescuer confirms; the resident is told)
 //   -> ROUTE TO NEAREST AVAILABLE EVACUATION CENTER (road distance, never a full center)
 //   -> START NAVIGATION (resident is told) -> CONFIRM SUCCESSFUL EVACUATION.
 // Seats are reserved by the server in one locked transaction, so two units can
@@ -11,7 +11,7 @@ import {
   getMissionStatus, getCenterAvailability, confirmResidentLocated, assignEvacuationCenter,
   releaseEvacuationReservation, confirmEvacuationArrival, startEvacuation, onLiveSignal,
 } from '../services/api';
-import { flushNow, GPS_STALE_MS } from '../lib/rescueTracker';
+import { GPS_STALE_MS } from '../lib/rescueTracker';
 import { distanceMeters, formatDistance } from '../lib/location';
 import { rankCentersByRoad } from '../lib/roadRouting';
 import { timeAgo } from '../lib/rescuerFeed';
@@ -32,20 +32,14 @@ export function GpsStatusLine({ tracker }) {
   const live = fix && Date.now() - new Date(fix.at).getTime() < GPS_STALE_MS;
   let text;
   let color = '#15803D';
-  if (tracker.permission === 'denied') { text = 'Location permission is off. Allow it so the resident can see you coming.'; color = '#B91C1C'; }
-  else if (!tracker.servicesOn) { text = 'Phone location is switched off. Turn it on to share your position.'; color = '#B91C1C'; }
+  if (tracker.permission === 'denied') { text = 'Location permission is off. Allow it to see yourself on the map.'; color = '#B91C1C'; }
+  else if (!tracker.servicesOn) { text = 'Phone location is switched off.'; color = '#B91C1C'; }
   else if (!fix) { text = 'Waiting for a GPS fix…'; color = '#B45309'; }
   else {
     text = `${live ? 'GPS live' : 'GPS signal lost'} • ±${fix.accuracy ?? '?'} m • fix ${ago(fix.at)}`;
     if (!live) color = '#B45309';
   }
-  let sync = '';
-  if (tracker.ticketId) {
-    sync = tracker.online
-      ? ` • sent ${ago(tracker.lastSentAt)}`
-      : ` • OFFLINE, ${tracker.queued} fix${tracker.queued === 1 ? '' : 'es'} waiting to send`;
-  }
-  return <Text style={[styles.gpsLine, { color }]}>📡 {text}{sync}</Text>;
+  return <Text style={[styles.gpsLine, { color }]}>📡 {text}</Text>;
 }
 
 export default function MissionPanel({ res, tracker, onTarget, onClosed }) {
@@ -118,7 +112,7 @@ export default function MissionPanel({ res, tracker, onTarget, onClosed }) {
     return f && Date.now() - new Date(f.at).getTime() < 120000 ? f : null;
   };
 
-  // ---- 1. arrival at the resident (manual; GPS proximity only suggests it) ----
+  // ---- 1. arrival at the resident (the rescuer confirms; the resident is told) ----
   const handleArrived = () => {
     Alert.alert(
       'Arrived at the resident?',
@@ -128,7 +122,6 @@ export default function MissionPanel({ res, tracker, onTarget, onClosed }) {
         {
           text: 'Confirm arrival',
           onPress: async () => {
-            flushNow();
             const r = await act(() => confirmResidentLocated(ticketId, freshFix()), 'Arrival not saved');
             if (r) Alert.alert('Arrival confirmed ✅', 'The resident was notified. Next: route to the nearest available evacuation center.');
           },
@@ -157,7 +150,7 @@ export default function MissionPanel({ res, tracker, onTarget, onClosed }) {
         setNoCenter(r);
         setPick(null);
         Alert.alert('No available evacuation center found',
-          `${r?.reason || 'No center has room.'}\n\nThe EOC has been sent a shelter request for this household. Radio the MDRRMO to coordinate a place.`);
+          `${r?.reason || 'No center has room.'}\n\nThe MDRRMO has been sent a shelter request for this household. Radio the MDRRMO to coordinate a place.`);
         return;
       }
       setNoCenter(null);
@@ -225,8 +218,6 @@ export default function MissionPanel({ res, tracker, onTarget, onClosed }) {
   };
 
   const located = Boolean(mission?.located_at);
-  const stage = tracker.server?.ticketId === ticketId ? tracker.server.proximity_stage : mission?.proximity_stage;
-  const distToResident = distanceMeters(tracker.fix, { lat: res.lat, lng: res.lng });
   const pickHere = pick && reserved && pick.centerId === reserved.center_id ? pick : null;
   const straightToCenter = reserved ? distanceMeters(tracker.fix, { lat: Number(reserved.latitude), lng: Number(reserved.longitude) }) : null;
 
@@ -241,15 +232,6 @@ export default function MissionPanel({ res, tracker, onTarget, onClosed }) {
 
       {!located && (
         <>
-          {stage === 'critical' ? (
-            <Text style={[styles.stage, styles.stageCritical]}>📍 GPS shows you have reached the resident. Confirm arrival when you are with them.</Text>
-          ) : stage === 'nearby' ? (
-            <Text style={[styles.stage, styles.stageNear]}>📍 About 10 m from the resident.</Text>
-          ) : stage === 'approaching' ? (
-            <Text style={[styles.stage, styles.stageApproach]}>🚑 Within 100 m of the resident.</Text>
-          ) : distToResident != null ? (
-            <Text style={styles.muted}>{formatDistance(distToResident)} from the SOS point (your GPS).</Text>
-          ) : null}
           <TouchableOpacity style={styles.btnPrimary} onPress={handleArrived} disabled={busy} activeOpacity={0.85}>
             {busy ? <ActivityIndicator color="#FFF" /> : <Text style={styles.btnText}>✅ CONFIRM ARRIVAL AT RESIDENT</Text>}
           </TouchableOpacity>
@@ -263,7 +245,7 @@ export default function MissionPanel({ res, tracker, onTarget, onClosed }) {
               <Text style={[styles.cardKicker, { color: '#B91C1C' }]}>⚠️ NO AVAILABLE EVACUATION CENTER FOUND</Text>
               <Text style={styles.cardLine}>
                 {noCenter.reason} No route was made to a full center.
-                {mission?.open_shelter_request ? ' The EOC has a shelter request for this household.' : ''} Radio the MDRRMO to coordinate a place, then try again.
+                {mission?.open_shelter_request ? ' The MDRRMO has a shelter request for this household.' : ''} Radio the MDRRMO to coordinate a place, then try again.
               </Text>
             </View>
           )}
@@ -275,7 +257,7 @@ export default function MissionPanel({ res, tracker, onTarget, onClosed }) {
 
       {located && reserved && (
         <View style={styles.card}>
-          <Text style={styles.cardKicker}>🏫 EVACUATION CENTER{reserved.override ? ' (EOC-APPROVED ALTERNATIVE)' : ''}</Text>
+          <Text style={styles.cardKicker}>🏫 EVACUATION CENTER{reserved.override ? ' (APPROVED BY THE MDRRMO)' : ''}</Text>
           <Text style={styles.cardTitle}>{reserved.center_name}</Text>
           <Text style={styles.cardLine}>
             {[reserved.barangay_name && `Brgy. ${reserved.barangay_name}`, typeLabel(reserved.center_type)].filter(Boolean).join(' • ')}
@@ -326,10 +308,6 @@ const styles = StyleSheet.create({
   gpsLine: { fontSize: 10.5, fontWeight: '700' },
   offline: { fontSize: 10.5, fontWeight: '700', color: '#B45309', backgroundColor: '#FEF3C7', padding: 6, borderRadius: 6 },
   muted: { fontSize: 10.5, color: '#475569' },
-  stage: { fontSize: 11.5, fontWeight: '900', padding: 7, borderRadius: 6, overflow: 'hidden' },
-  stageApproach: { color: '#1E3A8A', backgroundColor: '#DBEAFE' },
-  stageNear: { color: '#B45309', backgroundColor: '#FEF3C7' },
-  stageCritical: { color: '#FFFFFF', backgroundColor: '#DC2626' },
   btnPrimary: { backgroundColor: '#7C3AED', borderRadius: 8, paddingVertical: 11, alignItems: 'center' },
   btnRoute: { backgroundColor: '#1D4ED8', borderRadius: 8, paddingVertical: 11, paddingHorizontal: 8, alignItems: 'center' },
   btnDone: { backgroundColor: '#16A34A', borderRadius: 8, paddingVertical: 11, alignItems: 'center', marginTop: 6 },
