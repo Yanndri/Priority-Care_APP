@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { useLocalSearchParams } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { View, Text, StyleSheet, TouchableOpacity, Modal, TextInput, Alert, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import OfflineMap from '../../components/offlineMap';
@@ -8,8 +8,9 @@ import { useSession } from '../../components/SessionProvider';
 import { HAZARD_OPTIONS } from '../../constants/mockData';
 import { FONT_SIZES, FONT_WEIGHTS } from '../../constants/typography';
 import { getPublicMap, reportHazard, subscribe } from '../../services/api';
-import { getCurrentCoords, distanceMeters } from '../../lib/location';
+import { getCurrentCoords, distanceMeters, watchCoords } from '../../lib/location';
 import { toMapHazard, toMapShelter } from '../../lib/mapData';
+import { useMyRescue, rescuerPointOf, centerTargetOf, RescueStatusCard } from '../../components/RescueWatcher';
 
 // Cordova town centre, used only when the account has no saved home location.
 const TOWN_CENTRE = { lat: 10.2546, lng: 123.952 };
@@ -50,6 +51,11 @@ export default function ResidentEvacMapScreen() {
   const [selectedHazard, setSelectedHazard] = useState(HAZARD_OPTIONS[0]);
   const [hazardNote, setHazardNote] = useState('');
 
+  // The rescue unit coming to this resident (live position and reserved center).
+  const rescue = useMyRescue();
+  const rescuerPoint = rescuerPointOf(rescue.mission);
+  const missionTarget = centerTargetOf(rescue.mission);
+
   const distFromHome = distanceMeters(userGpsCoords, homeCoords) || 0;
   const isDisplaced = distFromHome > 35;
 
@@ -79,6 +85,15 @@ export default function ResidentEvacMapScreen() {
       }
     });
   }, []);
+
+  // While this map is open and on real GPS, follow the phone as it moves so the
+  // position dot and the route to a disaster or SOS stay current.
+  useFocusEffect(
+    useCallback(() => {
+      if (gpsMode !== 'REAL') return undefined;
+      return watchCoords(setUserGpsCoords);
+    }, [gpsMode])
+  );
 
   // Confirmed hazards for everyone, plus this phone's own reports until they are reviewed.
   const shownHazards = [...hazards, ...myReports.filter((r) => !hazards.some((h) => h.id === r.id))];
@@ -160,6 +175,8 @@ export default function ResidentEvacMapScreen() {
         <Text style={styles.legendText}>🟦 Shelter [H]</Text>
       </View>
 
+      <RescueStatusCard mission={rescue.mission} online={rescue.online} style={{ marginHorizontal: 10, marginTop: 6 }} />
+
       {isSettingSimGps && (
         <View style={[styles.dropBanner, { backgroundColor: '#1E3A8A' }]}>
           <Text style={styles.dropText}>🕹️ TAP MAP TO SET YOUR SIMULATED GPS LOCATION</Text>
@@ -189,6 +206,8 @@ export default function ResidentEvacMapScreen() {
         isDroppingHazard={isDroppingHazard}
         triggerGpsQuery={triggerGpsQuery}
         focusPoint={disasterFocus}
+        rescuerPoint={rescuerPoint}
+        missionTarget={missionTarget}
         onHazardCoordinateDrop={(c) => {
           setIsDroppingHazard(false);
           setPendingCoords(c);

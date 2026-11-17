@@ -11,6 +11,7 @@ import {
   listBarangays, memberToApp, memberToDb, setMyHousePhoto, signedPhotoUrl, signOut, updateMyHousehold,
 } from '../../services/api';
 import { getCurrentCoords } from '../../lib/location';
+import HomeLocationPicker from '../../components/HomeLocationPicker';
 
 // What the screen edits, built from get_my_profile.
 function formFromProfile(profile) {
@@ -43,6 +44,8 @@ export default function ResidentProfileScreen() {
   const [draft, setDraft] = useState(null);
   const [showPreview, setShowPreview] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [savingPin, setSavingPin] = useState(false);
 
   // Reload the form when the profile changes (after saving or signing in).
   useEffect(() => {
@@ -116,6 +119,29 @@ export default function ResidentProfileScreen() {
         },
       ]
     );
+  };
+
+  // "Use My Current Location": the pin is saved to the database straight away.
+  const handleSavePin = async (p) => {
+    if (!isHead) {
+      setPickerOpen(false);
+      return Alert.alert('View only', 'Only the household head can change the home location.');
+    }
+    setSavingPin(true);
+    try {
+      await updateMyHousehold({ gps_lat: p.lat, gps_long: p.lng });
+      const otherEdits = JSON.stringify({ ...form, homeLat: null, homeLng: null }) !== JSON.stringify({ ...saved, homeLat: null, homeLng: null });
+      setForm((f) => ({ ...f, homeLat: p.lat, homeLng: p.lng }));
+      setSaved((s) => ({ ...s, homeLat: p.lat, homeLng: p.lng }));
+      // Reload the profile so the maps use the new pin, unless that would wipe other unsaved edits.
+      if (!otherEdits) await refresh();
+      setPickerOpen(false);
+      Alert.alert('Home location saved 📍', `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}${p.accuracy != null ? ` (GPS ±${p.accuracy} m)` : ' (placed on the map)'}`);
+    } catch (e) {
+      Alert.alert('Location not saved', e.message);
+    } finally {
+      setSavingPin(false);
+    }
   };
 
   const handleCamera = async () => {
@@ -253,6 +279,9 @@ export default function ResidentProfileScreen() {
               <Text style={styles.btnCalibrateText}>🔄 Recalibrate</Text>
             </TouchableOpacity>
           </View>
+          <TouchableOpacity style={styles.btnUseLocation} onPress={() => setPickerOpen(true)}>
+            <Text style={styles.btnUseLocationText}>📍 Use My Current Location</Text>
+          </TouchableOpacity>
 
           {/* Micro-Navigation Landmark Description */}
           <Text style={styles.fieldLabel}>LANDMARK / MICRO-NAVIGATION</Text>
@@ -330,6 +359,14 @@ export default function ResidentProfileScreen() {
       </ScrollView>
 
       {/* Full-Screen Image Preview Modal */}
+      <HomeLocationPicker
+        visible={pickerOpen}
+        fallback={form.homeLat != null ? { lat: form.homeLat, lng: form.homeLng } : null}
+        saving={savingPin}
+        onCancel={() => setPickerOpen(false)}
+        onConfirm={handleSavePin}
+      />
+
       <Modal visible={showPreview} transparent animationType="fade">
         <View style={styles.fullscreenBg}>
           <View style={styles.fullscreenHeader}>
@@ -419,6 +456,8 @@ const styles = StyleSheet.create({
   geoBox: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE', borderRadius: 8, padding: 10, marginTop: 4, marginBottom: 8 },
   geoVal: { fontSize: FONT_SIZES.body, fontWeight: FONT_WEIGHTS.extraBold, color: '#1E3A8A' },
   geoSub: { fontSize: FONT_SIZES.tiny, color: '#64748B', marginTop: 2 },
+  btnUseLocation: { backgroundColor: '#1E3A8A', borderRadius: 8, paddingVertical: 11, alignItems: 'center', marginBottom: 10 },
+  btnUseLocationText: { color: '#FFFFFF', fontWeight: '900', fontSize: 13 },
   btnCalibrate: { backgroundColor: '#1E3A8A', paddingHorizontal: 10, paddingVertical: 7, borderRadius: 6 },
   btnCalibrateText: { color: '#FFF', fontSize: FONT_SIZES.tiny, fontWeight: FONT_WEIGHTS.extraBold },
 

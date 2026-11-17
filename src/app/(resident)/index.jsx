@@ -11,6 +11,7 @@ import {
   getMyPreemptive, personBadge, MOBILITY_LABELS,
 } from '../../services/api';
 import DisasterBanner from '../../components/DisasterBanner';
+import { useMyRescue, RescueStatusCard } from '../../components/RescueWatcher';
 import { getCurrentCoords, distanceMeters, formatDistance, shelterLoad } from '../../lib/location';
 
 const clock = (iso) => {
@@ -28,6 +29,7 @@ export default function ResidentDashboard() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const { profile } = useSession();
+  const rescue = useMyRescue();
   const cached = cache.uid != null && cache.uid === profile?.uid ? cache : null;
   const resident = profile?.resident || {};
   const fullName = [profile?.f_name, profile?.l_name].filter(Boolean).join(' ');
@@ -294,6 +296,9 @@ export default function ResidentDashboard() {
                   {sos.app_status === 'EVACUATED' ? `✓ 3. Admitted to ${sos.shelter}` : '○ 3. Admitted to an evacuation centre'}
                 </Text>
               </View>
+
+              {/* Live rescue unit: distance, GPS accuracy and how fresh the position is */}
+              <RescueStatusCard mission={rescue.mission} online={rescue.online} style={{ marginBottom: 8 }} />
 
               <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
                 <TouchableOpacity style={styles.btnPrimary} onPress={() => router.push('/(resident)/evac-map')}>

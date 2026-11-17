@@ -6,6 +6,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { listBarangays, normalizeContact, registerResident } from '../../services/api';
 import { useSession } from '../../components/SessionProvider';
+import HomeLocationPicker from '../../components/HomeLocationPicker';
 import {
   ID_TYPES,
   RESIDENT_CATEGORIES,
@@ -52,6 +53,7 @@ export default function RegisterScreen() {
   const [headCategory, setHeadCategory] = useState(RESIDENT_CATEGORIES[0].id);
   const [headMobility, setHeadMobility] = useState(RESIDENT_MOBILITIES[0].id);
   const [homeCoords, setHomeCoords] = useState(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   // Residential Tenure & Floor Level (Apartment / Renters)
   const [tenure, setTenure] = useState(TENURE_TYPES[0].id);
@@ -296,6 +298,9 @@ export default function RegisterScreen() {
             </Text>
           </TouchableOpacity>
         </View>
+        <TouchableOpacity style={styles.btnUseLocation} onPress={() => setPickerOpen(true)}>
+          <Text style={styles.btnUseLocationText}>📍 Use My Current Location</Text>
+        </TouchableOpacity>
 
         {/* Representative Priority & Mobility Group */}
         <Text style={styles.miniLabel}>STEP 1: PRIORITY / AGE GROUP</Text>
@@ -462,6 +467,17 @@ export default function RegisterScreen() {
       </ScrollView>
 
       {/* Full-Screen Image Preview Modal */}
+      {/* GPS pin on the map; saved with the registration */}
+      <HomeLocationPicker
+        visible={pickerOpen}
+        fallback={homeCoords || (barangay?.center_lat ? { lat: Number(barangay.center_lat), lng: Number(barangay.center_lng) } : null)}
+        onCancel={() => setPickerOpen(false)}
+        onConfirm={(p) => {
+          setHomeCoords({ lat: p.lat, lng: p.lng });
+          setPickerOpen(false);
+        }}
+      />
+
       <Modal visible={showPreview} transparent animationType="fade">
         <View style={styles.fullscreenBg}>
           <View style={styles.fullscreenHeader}>
@@ -540,6 +556,8 @@ const styles = StyleSheet.create({
   geoTagInfo: { flex: 1, paddingRight: 8 },
   geoTagTitle: { fontSize: FONT_SIZES.tiny, fontWeight: FONT_WEIGHTS.extraBold, color: '#1E3A8A' },
   geoTagSub: { fontSize: FONT_SIZES.tiny, color: '#475569', marginTop: 2 },
+  btnUseLocation: { backgroundColor: '#1E3A8A', borderRadius: 8, paddingVertical: 11, alignItems: 'center', marginBottom: 10 },
+  btnUseLocationText: { color: '#FFFFFF', fontWeight: '900', fontSize: 13 },
   btnLockGeo: { backgroundColor: '#1E3A8A', paddingVertical: 7, paddingHorizontal: 10, borderRadius: 6 },
   btnLockGeoActive: { backgroundColor: '#16A34A' },
   btnLockGeoText: { color: '#FFF', fontSize: FONT_SIZES.caption, fontWeight: FONT_WEIGHTS.extraBold },

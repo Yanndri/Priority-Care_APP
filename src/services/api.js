@@ -270,6 +270,45 @@ export const admitWalkIn = ({ centerId, name, barangayId = null, sitio = '', hea
   }));
 
 // ---------------------------------------------------------------
+// Live rescue missions (needs 20261116_01_live_rescue_tracking.sql)
+// ---------------------------------------------------------------
+
+// points: [{ lat, lng, accuracy, heading, speed, recorded_at }] (offline fixes are sent in one batch)
+export const reportUnitLocation = (ticketId, points) =>
+  call(supabase.rpc('report_unit_location', { p_ticket_id: ticketId, p_points: points }));
+export const getMissionStatus = (ticketId) => call(supabase.rpc('get_mission_status', { p_ticket_id: ticketId }));
+export const getMyRescueTracking = () => call(supabase.rpc('get_my_rescue_tracking'));
+export const getCenterAvailability = () => call(supabase.rpc('get_center_availability'));
+// Rescuer confirms arrival at the resident (manual, also suggested by GPS proximity).
+export const confirmResidentLocated = (ticketId, fix) =>
+  call(supabase.rpc('confirm_resident_located', {
+    p_ticket_id: ticketId, p_lat: fix?.lat ?? null, p_lng: fix?.lng ?? null, p_accuracy: fix?.accuracy ?? null,
+  }));
+// Re-run center selection (e.g. to transfer: pass the current center in exclude).
+// roadOrder: center ids sorted by road distance; the server reserves the first one that still has room.
+export const assignEvacuationCenter = (ticketId, { fix = null, centerId = null, exclude = [], roadOrder = null } = {}) =>
+  call(supabase.rpc('assign_evacuation_center', {
+    p_ticket_id: ticketId, p_lat: fix?.lat ?? null, p_lng: fix?.lng ?? null, p_center_id: centerId, p_exclude: exclude,
+    p_road_order: roadOrder,
+  }));
+// Rescuer leaves for the reserved center with the household (tells the resident once).
+export const startEvacuation = (ticketId) => call(supabase.rpc('start_evacuation', { p_ticket_id: ticketId }));
+export const releaseEvacuationReservation = (ticketId, reason) =>
+  call(supabase.rpc('release_evacuation_reservation', { p_ticket_id: ticketId, p_reason: reason }));
+export const confirmEvacuationArrival = (ticketId, note = '') =>
+  call(supabase.rpc('confirm_evacuation_arrival', { p_ticket_id: ticketId, p_note: note }));
+
+// Streams one unit's live position (row-level security limits who receives it).
+export function subscribeUnitLocation(unitId, onRow) {
+  const channel = supabase
+    .channel(`pc-unit-location-${unitId}-${Date.now()}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'rescue_unit_locations', filter: `unit_id=eq.${unitId}` },
+      (payload) => { if (payload.new) onRow(payload.new); })
+    .subscribe();
+  return () => { supabase.removeChannel(channel); };
+}
+
+// ---------------------------------------------------------------
 // Live updates: calls onChange whenever a row the user can see changes.
 // Returns an unsubscribe function.
 // ---------------------------------------------------------------

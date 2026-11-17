@@ -19,6 +19,54 @@ export async function getCurrentCoords({ precise = false } = {}) {
   }
 }
 
+// Follows the phone while it moves. Calls onChange({ lat, lng }) every time it
+// moves about 10 m (or every 5 s). Returns a function that stops watching.
+export function watchCoords(onChange) {
+  let sub = null;
+  let stopped = false;
+  (async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted' || stopped) return;
+      sub = await Location.watchPositionAsync(
+        { accuracy: Location.Accuracy.High, distanceInterval: 10, timeInterval: 5000 },
+        (pos) => onChange({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      );
+      if (stopped) sub.remove();
+    } catch {
+      // No location: the map keeps the last known position.
+    }
+  })();
+  return () => {
+    stopped = true;
+    if (sub) sub.remove();
+  };
+}
+
+// One precise reading with its accuracy, for pinning the home. Returns
+// { lat, lng, accuracy, fromCache } or { error: 'denied' | 'services_off' | 'no_fix', canAskAgain }.
+export async function getLocationFix({ timeoutMs = 15000 } = {}) {
+  try {
+    const perm = await Location.requestForegroundPermissionsAsync();
+    if (perm.status !== 'granted') return { error: 'denied', canAskAgain: perm.canAskAgain !== false };
+    if (!(await Location.hasServicesEnabledAsync())) return { error: 'services_off' };
+    const fresh = await Promise.race([
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest }).catch(() => null),
+      new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+    ]);
+    const pos = fresh || (await Location.getLastKnownPositionAsync({ maxAge: 2 * 60 * 1000 }).catch(() => null));
+    if (!pos) return { error: 'no_fix' };
+    return {
+      lat: pos.coords.latitude,
+      lng: pos.coords.longitude,
+      accuracy: pos.coords.accuracy != null ? Math.round(pos.coords.accuracy) : null,
+      fromCache: !fresh,
+    };
+  } catch {
+    return { error: 'no_fix' };
+  }
+}
+
 // Straight-line distance in metres; null when either point is missing.
 export function distanceMeters(a, b) {
   if (!a || !b || a.lat == null || a.lng == null || b.lat == null || b.lng == null) return null;

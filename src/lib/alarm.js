@@ -100,3 +100,37 @@ export function onAlarmTap(kind, onTap) {
   });
   return () => sub.remove();
 }
+
+// A normal (non-siren) notification with the phone's default sound, for rescue progress:
+// "rescuer approaching", "center assigned". urgent = heads-up priority and a short buzz.
+const UPDATES_CHANNEL = 'rescue-updates-v1';
+let updatesReady = null;
+export async function notify({ title, body, data = {}, urgent = false }) {
+  if (!updatesReady) {
+    updatesReady = (async () => {
+      if (Platform.OS === 'android') {
+        await Notifications.setNotificationChannelAsync(UPDATES_CHANNEL, {
+          name: 'Rescue updates',
+          description: 'Rescuer approaching, evacuation center assigned',
+          importance: Notifications.AndroidImportance.HIGH,
+          sound: 'default',
+          vibrationPattern: [0, 400, 200, 400],
+          lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+        });
+      }
+      const { status } = await Notifications.getPermissionsAsync();
+      if (status !== 'granted') await Notifications.requestPermissionsAsync();
+    })().catch(() => {});
+  }
+  await updatesReady;
+  if (urgent) Vibration.vibrate([0, 600, 250, 600]);
+  try {
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title, body, data, sound: 'default',
+        priority: urgent ? Notifications.AndroidNotificationPriority.MAX : Notifications.AndroidNotificationPriority.HIGH,
+      },
+      trigger: Platform.OS === 'android' ? { channelId: UPDATES_CHANNEL } : null,
+    });
+  } catch { /* notifications off: the in-app alert still shows */ }
+}

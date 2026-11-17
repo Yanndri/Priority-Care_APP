@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Modal, TextInput, Alert, Image, ScrollView, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useLocalSearchParams } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { File, Paths } from 'expo-file-system';
 import OfflineMap from '../../components/offlineMap';
 import BottomNav from '../../components/BottomNav';
@@ -11,6 +11,8 @@ import { HAZARD_OPTIONS, RESCUER_DEFAULT_COORDS } from '../../constants/mockData
 import { useRescuerFeed } from '../../lib/rescuerFeed';
 import DisasterBanner from '../../components/DisasterBanner';
 import { getCurrentCoords } from '../../lib/location';
+import { useTracker } from '../../lib/rescueTracker';
+import MissionPanel, { GpsStatusLine } from '../../components/MissionPanel';
 import { recordEvacuation, reportHazard, reviewHazard, signedPhotoUrl, updateTicketStatus } from '../../services/api';
 
 function getDistanceMeters(lat1, lon1, lat2, lon2) {
@@ -114,13 +116,16 @@ export default function RescuerMapScreen() {
   }, [disasterFocus]);
   const [showActiveSosOnly, setShowActiveSosOnly] = useState(true);
 
-  const [gpsMode, setGpsMode] = useState('SIMULATED');
+  // Simulated GPS is a development tool only; release builds always use the phone's GPS.
+  const [gpsMode, setGpsMode] = useState(__DEV__ ? 'SIMULATED' : 'REAL');
   const [isSettingSimGps, setIsSettingSimGps] = useState(false);
   const [isLocatingGps, setIsLocatingGps] = useState(false);
-  const [rescuerGpsCoords, setRescuerGpsCoords] = useState({
+  // No made-up position in release builds: the ambulance appears with the first real fix.
+  const [rescuerGpsCoords, setRescuerGpsCoords] = useState(__DEV__ ? {
     lat: RESCUER_DEFAULT_COORDS.lat,
     lng: RESCUER_DEFAULT_COORDS.lng,
-  });
+  } : null);
+  const [missionTarget, setMissionTarget] = useState(null);
   const [triggerGpsQuery, setTriggerGpsQuery] = useState(0);
   const [gpsModalVisible, setGpsModalVisible] = useState(false);
 
@@ -183,6 +188,22 @@ export default function RescuerMapScreen() {
       }
     });
   }, []);
+
+  // While this map is open, follow the phone as it moves so the ambulance marker and
+  // the route stay current. The same shared watcher reports the unit's position for an
+  // active mission (lib/rescueTracker), so the phone never runs two GPS watchers.
+  const [mapFocused, setMapFocused] = useState(false);
+  useFocusEffect(useCallback(() => {
+    setMapFocused(true);
+    return () => setMapFocused(false);
+  }, []));
+  const tracker = useTracker({ active: mapFocused });
+  useEffect(() => {
+    if (!tracker.fix) return;
+    if (gpsMode !== 'REAL' && __DEV__) return; // a developer placed the unit by hand
+    if (gpsMode !== 'REAL') setGpsMode('REAL');
+    setRescuerGpsCoords({ lat: tracker.fix.lat, lng: tracker.fix.lng });
+  }, [tracker.fix, gpsMode]);
 
   useEffect(() => {
     let alive = true;
@@ -284,6 +305,9 @@ export default function RescuerMapScreen() {
 
   const handleGpsLocationError = () => {
     setIsLocatingGps(false);
+    if (!__DEV__) {
+      return Alert.alert('GPS signal weak ⚠️', 'Could not get a satellite fix. Move to an open area; your last known position stays on the map.');
+    }
     Alert.alert('Rescuer GPS Weak ⚠️', 'Satellite lock timed out indoors. Switch to Simulated GPS?', [
       { text: 'Keep Trying', style: 'cancel' },
       {
@@ -438,7 +462,7 @@ export default function RescuerMapScreen() {
     setNote(selectedResident.id, { supportRequest: { type, requestedAt: timeStr, status: 'PENDING_EOC' } });
     Alert.alert(
       'Backup request noted 📡',
-      `• Requisition: ${type}\n• Target: ${selectedResident.name}\n• GPS: ${rescuerGpsCoords.lat.toFixed(4)}, ${rescuerGpsCoords.lng.toFixed(4)}\n\nRadio this to the EOC as well; backup requests are not sent to the server yet.`
+      `• Requisition: ${type}\n• Target: ${selectedResident.name}\n• GPS: ${rescuerGpsCoords ? `${rescuerGpsCoords.lat.toFixed(4)}, ${rescuerGpsCoords.lng.toFixed(4)}` : 'no fix yet'}\n\nRadio this to the EOC as well; backup requests are not sent to the server yet.`
     );
   };
 
@@ -535,10 +559,10 @@ export default function RescuerMapScreen() {
   const selectedDistFromHome = selectedResident
     ? getDistanceMeters(selectedResident.lat, selectedResident.lng, selectedResident.homeLat, selectedResident.homeLng)
     : 0;
-  const selectedDistFromRescuer = selectedResident
+  const selectedDistFromRescuer = selectedResident && rescuerGpsCoords
     ? getDistanceMeters(rescuerGpsCoords.lat, rescuerGpsCoords.lng, selectedResident.lat, selectedResident.lng)
     : 0;
-  const hazardDistFromRescuer = selectedHazardPin
+  const hazardDistFromRescuer = selectedHazardPin && rescuerGpsCoords
     ? getDistanceMeters(rescuerGpsCoords.lat, rescuerGpsCoords.lng, selectedHazardPin.lat, selectedHazardPin.lng)
     : 0;
 
@@ -587,6 +611,13 @@ export default function RescuerMapScreen() {
           </Text>
         </TouchableOpacity>
       </View>
+
+      {/* Live GPS sharing for the active mission */}
+      {tracker.ticketId && !selectedResident && (
+        <View style={[styles.gpsPill, { top: insets.top + 44 }]}>
+          <GpsStatusLine tracker={tracker} />
+        </View>
+      )}
 
       {/* Focused Incident Reset Banner */}
       {focusedResidentId && selectedResident && (
@@ -649,6 +680,7 @@ export default function RescuerMapScreen() {
         selectedResident={selectedResident}
         selectedHazardPin={selectedHazardPin}
         focusPoint={disasterFocus}
+        missionTarget={missionTarget}
         onPinSelect={(res) => {
           setSelectedBarangay(null);
           setSelectedHazardPin(null);
@@ -767,7 +799,7 @@ export default function RescuerMapScreen() {
                 )}
               </View>
               <Text style={styles.sheetSitio}>
-                Brgy. {selectedHazardPin.barangay} • 📍 {hazardDistFromRescuer}m from Unit
+                Brgy. {selectedHazardPin.barangay} • 📍 {rescuerGpsCoords ? `${hazardDistFromRescuer}m from Unit` : 'waiting for GPS'}
               </Text>
               <Text style={styles.hazardDescriptionText}>{selectedHazardPin.description}</Text>
               <Text style={styles.reportedByText}>
@@ -864,7 +896,7 @@ export default function RescuerMapScreen() {
                     <Text style={styles.badgeNormalText}>VPI {selectedResident.vpiScore || 50}</Text>
                   </View>
                 )}
-                <Text style={styles.timeTag}>📍 {selectedDistFromRescuer}m away</Text>
+                <Text style={styles.timeTag}>📍 {rescuerGpsCoords ? `${selectedDistFromRescuer}m away` : 'waiting for GPS'}</Text>
               </View>
             </View>
 
@@ -988,6 +1020,21 @@ export default function RescuerMapScreen() {
                     </Text>
                   </View>
                 )}
+                {selectedResident.isMine && selectedResident.ticketId &&
+                  ['ACCEPTED', 'EN_ROUTE', 'ON_SCENE'].includes(selectedResident.status) && (
+                  <MissionPanel
+                    key={selectedResident.ticketId}
+                    res={selectedResident}
+                    tracker={tracker}
+                    onTarget={setMissionTarget}
+                    onClosed={() => {
+                      setMissionTarget(null);
+                      feed.reload();
+                      setSelectedResident(null);
+                      setFocusedResidentId(null);
+                    }}
+                  />
+                )}
                 {selectedResident.status === 'ON_SCENE' && selectedResident.isMine && (
                   <View style={{ flexDirection: 'row', gap: 6, marginBottom: 6 }}>
                     {!selectedResident.verifiedBy && (
@@ -1007,6 +1054,7 @@ export default function RescuerMapScreen() {
                   </View>
                 )}
 
+                {!(missionTarget && selectedResident.status === 'ON_SCENE') && (
                 <TouchableOpacity
                   style={[styles.btnStatus, { backgroundColor: getBtnConfig(selectedResident)?.bg }]}
                   onPress={() => handleAdvanceStatus(selectedResident)}
@@ -1017,6 +1065,7 @@ export default function RescuerMapScreen() {
                     <Text style={styles.btnStatusText}>{getBtnConfig(selectedResident)?.label}</Text>
                   )}
                 </TouchableOpacity>
+                )}
 
                 {selectedResident.isMine && selectedResident.status !== 'PENDING' && (
                   <TouchableOpacity
@@ -1267,6 +1316,8 @@ export default function RescuerMapScreen() {
                 </Text>
               </TouchableOpacity>
 
+              {/* Simulated positions are for development builds only. */}
+              {__DEV__ && (<>
               <TouchableOpacity
                 style={[styles.optBtn, gpsMode === 'SIMULATED' && styles.optBtnActive]}
                 onPress={() => {
@@ -1296,6 +1347,7 @@ export default function RescuerMapScreen() {
                   🕹️ Preset: Poblacion Command Post
                 </Text>
               </TouchableOpacity>
+              </>)}
             </View>
 
             <TouchableOpacity style={styles.btnCancel} onPress={() => setGpsModalVisible(false)}>
@@ -1456,6 +1508,10 @@ const styles = StyleSheet.create({
   filterTextSos: { color: '#DC2626' },
   filterTextAll: { color: '#1E3A8A' },
 
+  gpsPill: {
+    position: 'absolute', left: 14, right: 14, zIndex: 9, backgroundColor: '#FFFFFF',
+    borderRadius: 8, paddingVertical: 6, paddingHorizontal: 10, elevation: 5,
+  },
   fabStack: { position: 'absolute', right: 14, flexDirection: 'row', alignItems: 'center', gap: 8 },
   circleFab: {
     width: 44,

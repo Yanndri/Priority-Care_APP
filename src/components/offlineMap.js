@@ -21,6 +21,13 @@ export default function OfflineMap({
   focusPoint = null, // { key, lat, lng, label, note, icon, barangay }: flies to a disaster and marks it
   selectedResident = null,
   selectedHazardPin = null,
+  // Live position of the rescue unit coming to this resident:
+  // { lat, lng, accuracy, label, stale } (null hides it). Animated as it moves.
+  rescuerPoint = null,
+  // Evacuation center reserved for the mission: { key, lat, lng, name } (null clears).
+  // Drawn as a destination pin with the route from this phone to it.
+  missionTarget = null,
+  pinLabel = null, // popup text for this phone's dot (e.g. "Your home pin") instead of the GPS mode
   onPinSelect,
   onHazardPinSelect,
   onBarangaySelect,
@@ -32,10 +39,19 @@ export default function OfflineMap({
 }) {
   const webViewRef = useRef(null);
   const focusedKey = useRef(null);
+  const focusedSelKey = useRef(null);
 
   const pushStateToWebView = useCallback(() => {
     if (!webViewRef.current) return;
     const doFocus = Boolean(focusPoint && focusedKey.current !== focusPoint.key);
+    // Fly to a selected pin only when the selection changes, not on every GPS update,
+    // so the map does not jump back while the phone is moving or the user is panning.
+    const selKey = selectedResident
+      ? `r:${selectedResident.id}:${selectedResident.lat},${selectedResident.lng}`
+      : selectedHazardPin
+      ? `h:${selectedHazardPin.id}`
+      : null;
+    const doSelFocus = Boolean(selKey && focusedSelKey.current !== selKey);
 
     webViewRef.current.injectJavaScript(`
       if (typeof window.syncCachedSectors === 'function') {
@@ -52,6 +68,7 @@ export default function OfflineMap({
       if (typeof window.syncShelters === 'function') {
         window.syncShelters(${JSON.stringify(shelters)}, ${JSON.stringify(gpsLabel)});
       }
+      window.__pinLabel = ${JSON.stringify(pinLabel)};
       if (typeof window.syncResidents === 'function') {
         window.syncResidents(
           ${JSON.stringify(residents)},
@@ -59,6 +76,9 @@ export default function OfflineMap({
           ${JSON.stringify(role)},
           ${JSON.stringify(selectedResident?.id || null)}
         );
+      }
+      if (typeof window.syncRescuer === 'function') {
+        window.syncRescuer(${JSON.stringify(rescuerPoint)});
       }
       ${
         !selectedBarangay
@@ -74,16 +94,20 @@ export default function OfflineMap({
         doFocus
           ? ''
           : selectedResident
-          ? `if (typeof window.focusResidentLocation === 'function') { window.focusResidentLocation(${JSON.stringify(selectedResident)}); }`
+          ? doSelFocus ? `if (typeof window.focusResidentLocation === 'function') { window.focusResidentLocation(${JSON.stringify(selectedResident)}); }` : ''
           : selectedHazardPin
-          ? `if (typeof window.focusHazardLocation === 'function') { window.focusHazardLocation(${JSON.stringify(selectedHazardPin)}); }`
+          ? doSelFocus ? `if (typeof window.focusHazardLocation === 'function') { window.focusHazardLocation(${JSON.stringify(selectedHazardPin)}); }` : ''
           : !selectedBarangay
           ? `if (typeof window.clearSelectionOverlays === 'function') { window.clearSelectionOverlays(); }`
           : ''
       }
+      if (typeof window.syncMission === 'function') {
+        window.syncMission(${JSON.stringify(missionTarget)});
+      }
       true;
     `);
     if (doFocus) focusedKey.current = focusPoint.key;
+    else focusedSelKey.current = selKey;
   }, [
     cachedSectors,
     residents,
@@ -99,6 +123,9 @@ export default function OfflineMap({
     selectedHazardPin,
     selectedBarangay,
     focusPoint,
+    rescuerPoint,
+    missionTarget,
+    pinLabel,
   ]);
 
   useEffect(() => {
@@ -174,6 +201,16 @@ export default function OfflineMap({
             0% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.6); }
             100% { box-shadow: 0 0 0 22px rgba(220, 38, 38, 0); }
           }
+          .route-info {
+            display: flex; align-items: flex-start; gap: 10px; max-width: 260px;
+            padding: 10px 12px; border-radius: 12px; background: #FFFFFF; color: #0F172A;
+            font: 13px/1.4 -apple-system, Roboto, sans-serif; box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+          }
+          .route-info small { color: #475569; }
+          .route-close {
+            border: 0; background: #E2E8F0; color: #0F172A; border-radius: 12px;
+            width: 24px; height: 24px; font-size: 13px; line-height: 24px; padding: 0; flex: none;
+          }
           .focused-pin {
             width: 16px;
             height: 16px;
@@ -220,6 +257,20 @@ export default function OfflineMap({
             justify-content: center;
             font-size: 13px;
           }
+          .unit-live {
+            width: 30px; height: 30px; border-radius: 15px;
+            background-color: #DC2626; border: 2px solid #FFFFFF;
+            box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.30), 0 2px 5px rgba(0,0,0,0.5);
+            display: flex; align-items: center; justify-content: center; font-size: 15px;
+          }
+          .unit-live.stale { background-color: #94A3B8; box-shadow: 0 0 0 4px rgba(100, 116, 139, 0.25), 0 2px 5px rgba(0,0,0,0.4); }
+          .mission-pin {
+            width: 30px; height: 30px; border-radius: 15px 15px 15px 2px;
+            background-color: #16A34A; border: 2px solid #FFFFFF; color: #FFFFFF;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.5); transform: rotate(-45deg);
+            display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 13px;
+          }
+          .mission-pin span { transform: rotate(45deg); }
           .shelter-pin {
             width: 20px;
             height: 20px;
@@ -301,6 +352,177 @@ export default function OfflineMap({
           var displacementLine = null;
           var barangayLayers = {};
 
+          // ---------- Route from this phone to a target (disaster or SOS) ----------
+          // Road route from the free OpenStreetMap router when online; a straight dashed
+          // line with distance and direction when it cannot be reached.
+          var myCoords = null;
+          var route = null; // { slot, key, name, from, to, layers, token }
+          var routeInfo = L.control({ position: 'topleft' });
+          routeInfo.onAdd = function() {
+            var d = L.DomUtil.create('div', 'route-info');
+            d.style.display = 'none';
+            L.DomEvent.disableClickPropagation(d);
+            this._div = d;
+            return d;
+          };
+          routeInfo.addTo(map);
+          function fmtDist(m) {
+            return m >= 1000 ? (m / 1000).toFixed(m >= 10000 ? 0 : 1) + ' km' : Math.max(10, Math.round(m / 10) * 10) + ' m';
+          }
+          function fmtTime(sec) {
+            var m = Math.max(1, Math.round(sec / 60));
+            return m >= 60 ? Math.floor(m / 60) + ' h ' + (m % 60) + ' min' : m + ' min';
+          }
+          function directionName(lat1, lng1, lat2, lng2) {
+            var r = Math.PI / 180;
+            var y = Math.sin((lng2 - lng1) * r) * Math.cos(lat2 * r);
+            var x = Math.cos(lat1 * r) * Math.sin(lat2 * r) - Math.sin(lat1 * r) * Math.cos(lat2 * r) * Math.cos((lng2 - lng1) * r);
+            var b = (Math.atan2(y, x) / r + 360) % 360;
+            return ['north', 'northeast', 'east', 'southeast', 'south', 'southwest', 'west', 'northwest'][Math.round(b / 45) % 8];
+          }
+          function clearRoute() {
+            if (!route) return;
+            route.layers.forEach(function(l) { map.removeLayer(l); });
+            route = null;
+            if (routeInfo._div) routeInfo._div.style.display = 'none';
+          }
+          function showRouteInfo(html) {
+            var d = routeInfo._div;
+            if (!d) return;
+            d.innerHTML = '<div>' + html + '</div><button class="route-close" aria-label="Hide route">✕</button>';
+            d.style.display = 'flex';
+            // Sit below the app's own top bar and search box, clear of the bottom sheets.
+            d.style.marginTop = currentRole === 'rescuer' ? '175px' : '12px';
+            d.querySelector('.route-close').onclick = function(e) { e.stopPropagation(); clearRoute(); };
+          }
+          window.clearRouteSlot = function(slot) { if (route && route.slot === slot) clearRoute(); };
+          // Turn-by-turn text from an OSRM step.
+          function stepText(st) {
+            var m = st.maneuver || {}, mod = m.modifier ? m.modifier.replace('uturn', 'U-turn') : '';
+            var road = st.name ? ' onto <b>' + escapeHtml(st.name) + '</b>' : '';
+            switch (m.type) {
+              case 'depart': return 'Head ' + (mod || 'out') + road;
+              case 'arrive': return 'Arrive at <b>' + escapeHtml(route ? route.name : 'the destination') + '</b>';
+              case 'roundabout': case 'rotary': return 'At the roundabout take exit ' + (m.exit || '') + road;
+              case 'merge': return 'Merge ' + mod + road;
+              case 'fork': return 'Keep ' + mod + ' at the fork' + road;
+              case 'end of road': return 'At the end of the road turn ' + mod + road;
+              case 'continue': case 'new name': return (mod && mod !== 'straight' ? 'Bear ' + mod : 'Continue straight') + road;
+              default: return (mod ? 'Turn ' + mod : 'Continue') + road;
+            }
+          }
+          function distToRouteM(p, pts) {
+            // Shortest distance from p to the polyline (flat-earth, fine at city scale).
+            var best = Infinity, k = Math.cos(p.lat * Math.PI / 180) * 111320, ky = 110540;
+            for (var i = 0; i < pts.length - 1; i++) {
+              var ax = (pts[i][1] - p.lng) * k, ay = (pts[i][0] - p.lat) * ky;
+              var bx = (pts[i + 1][1] - p.lng) * k, by = (pts[i + 1][0] - p.lat) * ky;
+              var dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+              var t = L2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / L2)) : 0;
+              var x = ax + t * dx, y = ay + t * dy, d = Math.sqrt(x * x + y * y);
+              if (d < best) best = d;
+            }
+            return best;
+          }
+          var OFF_ROUTE_M = 40;
+          // Called on every GPS fix: keeps a drawn road route, reroutes only when the phone
+          // leaves it, and during navigation shows the next instruction and follows the phone.
+          function updateRouteProgress() {
+            if (!route || !myCoords) return;
+            if (!route.pts) { // no road route yet (or offline): retry as the phone moves
+              window.routeTo(route.slot, route.key, route.to.lat, route.to.lng, route.name, false, route.navigate);
+              return;
+            }
+            // Off the road route: ask for a new one, at most every 10 s.
+            if (distToRouteM(myCoords, route.pts) > OFF_ROUTE_M && Date.now() - (route.fetchedAt || 0) > 10000) {
+              window.routeTo(route.slot, route.key, route.to.lat, route.to.lng, route.name, false, route.navigate, true);
+              return;
+            }
+            showNavStep();
+          }
+          function showNavStep() {
+            if (!route || !myCoords || !route.navigate || !route.steps) return;
+            // Steps already reached (within 20 m of their turn point) are passed.
+            while (route.stepIdx < route.steps.length - 1) {
+              var loc = route.steps[route.stepIdx].maneuver.location;
+              if (getDistanceMeters(myCoords.lat, myCoords.lng, loc[1], loc[0]) > 20) break;
+              route.stepIdx++;
+            }
+            var st = route.steps[route.stepIdx], l2 = st.maneuver.location;
+            var dNext = getDistanceMeters(myCoords.lat, myCoords.lng, l2[1], l2[0]);
+            var left = getDistanceMeters(myCoords.lat, myCoords.lng, route.to.lat, route.to.lng);
+            showRouteInfo('➡️ In <b>' + fmtDist(dNext) + '</b>: ' + stepText(st) +
+              '<br><small>' + escapeHtml(route.name) + ': ' + fmtDist(left) + ' away</small>');
+            map.panTo([myCoords.lat, myCoords.lng], { animate: true });
+          }
+
+          window.routeTo = function(slot, key, lat, lng, name, fit, navigate, force) {
+            if (!lat || !lng) return;
+            name = name || 'the location';
+            if (!myCoords) {
+              clearRoute();
+              showRouteInfo('📍 Turn on location to see the way to <b>' + escapeHtml(name) + '</b>.');
+              return;
+            }
+            // Same target, same mode and still on (or near) it: keep the route already drawn.
+            if (!force && route && route.key === key && Boolean(route.navigate) === Boolean(navigate) &&
+                (route.pts ? distToRouteM(myCoords, route.pts) <= OFF_ROUTE_M
+                           : getDistanceMeters(route.from.lat, route.from.lng, myCoords.lat, myCoords.lng) < 30)) return;
+            var isNew = !route || route.key !== key;
+            clearRoute();
+            var from = { lat: myCoords.lat, lng: myCoords.lng };
+            var token = {};
+            route = { slot: slot, key: key, name: name, from: from, to: { lat: lat, lng: lng }, layers: [], token: token,
+                      navigate: Boolean(navigate), pts: null, steps: null, stepIdx: 0 };
+
+            var straight = L.polyline([[from.lat, from.lng], [lat, lng]], {
+              color: '#2563EB', weight: 3, dashArray: '6, 8', opacity: 0.85
+            }).addTo(map);
+            route.layers.push(straight);
+            var straightText = '📏 <b>' + fmtDist(getDistanceMeters(from.lat, from.lng, lat, lng)) + '</b> ' +
+              directionName(from.lat, from.lng, lat, lng) + ' of you, in a straight line';
+            showRouteInfo('🧭 Finding the road route to <b>' + escapeHtml(name) + '</b>…');
+            if (fit && isNew) map.fitBounds([[from.lat, from.lng], [lat, lng]], { padding: [70, 70], maxZoom: 17 });
+
+            var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+            var timer = setTimeout(function() { if (ctrl) ctrl.abort(); }, 8000);
+            var url = 'https://router.project-osrm.org/route/v1/driving/' +
+              from.lng + ',' + from.lat + ';' + lng + ',' + lat + '?overview=full&geometries=geojson' + (navigate ? '&steps=true' : '');
+            fetch(url, ctrl ? { signal: ctrl.signal } : {})
+              .then(function(r) { if (!r.ok) throw new Error('route ' + r.status); return r.json(); })
+              .then(function(j) {
+                clearTimeout(timer);
+                if (!route || route.token !== token) return;
+                var rt = j && j.routes && j.routes[0];
+                if (!rt || !rt.geometry || !rt.geometry.coordinates.length) throw new Error('no route');
+                map.removeLayer(straight);
+                var pts = rt.geometry.coordinates.map(function(c) { return [c[1], c[0]]; });
+                var casing = L.polyline(pts, { color: '#FFFFFF', weight: 8, opacity: 0.9 }).addTo(map);
+                var line = L.polyline(pts, { color: '#2563EB', weight: 5, opacity: 0.95 }).addTo(map);
+                // Short dotted links where the road ends short of the exact points.
+                var ends = L.polyline([[from.lat, from.lng], pts[0]], { color: '#2563EB', weight: 2, dashArray: '2, 6' }).addTo(map);
+                var ends2 = L.polyline([pts[pts.length - 1], [lat, lng]], { color: '#2563EB', weight: 2, dashArray: '2, 6' }).addTo(map);
+                route.layers = [casing, line, ends, ends2];
+                route.pts = pts;
+                route.fetchedAt = Date.now();
+                var legSteps = rt.legs && rt.legs[0] && rt.legs[0].steps;
+                if (navigate && legSteps && legSteps.length) {
+                  route.steps = legSteps;
+                  route.stepIdx = legSteps.length > 1 ? 1 : 0; // step 0 is "depart" from here
+                  showNavStep();
+                  return;
+                }
+                showRouteInfo('🧭 <b>' + fmtDist(rt.distance) + '</b> by road, about <b>' + fmtTime(rt.duration) +
+                  '</b> by car<br><small>to ' + escapeHtml(name) + '</small>');
+                if (fit && isNew) map.fitBounds(line.getBounds(), { padding: [70, 70], maxZoom: 17 });
+              })
+              .catch(function() {
+                clearTimeout(timer);
+                if (!route || route.token !== token) return;
+                showRouteInfo(straightText + '<br><small>No connection for a road route. Head toward ' + escapeHtml(name) + ' using the roads you know.</small>');
+              });
+          };
+
           function getDistanceMeters(lat1, lon1, lat2, lon2) {
             var R = 6371e3;
             var p1 = lat1 * Math.PI / 180, p2 = lat2 * Math.PI / 180;
@@ -317,6 +539,8 @@ export default function OfflineMap({
           };
 
           function renderGpsMarker(coords) {
+            myCoords = coords && coords.lat && coords.lng ? { lat: coords.lat, lng: coords.lng } : null;
+            updateRouteProgress();
             if (gpsMarker) { map.removeLayer(gpsMarker); gpsMarker = null; }
             if (residentSelfDisplacementLine) { map.removeLayer(residentSelfDisplacementLine); residentSelfDisplacementLine = null; }
 
@@ -331,7 +555,7 @@ export default function OfflineMap({
               gpsMarker = L.marker([coords.lat, coords.lng], { icon: gpsIcon, zIndexOffset: 1000 }).addTo(map);
 
               var modeLabel = currentGpsMode === 'REAL' ? '🛰️ Real-Time Hardware GPS' : '🕹️ Simulated GPS Position';
-              var popupLabel = isRescuer
+              var popupLabel = window.__pinLabel ? '<b>' + escapeHtml(window.__pinLabel) + '</b>' : isRescuer
                 ? "<b>🚑 " + escapeHtml(myUnitLabel) + "</b><br>" + modeLabel
                 : "<b>🔵 My Position</b><br>" + modeLabel;
 
@@ -514,6 +738,7 @@ export default function OfflineMap({
             window.clearBarangayHighlight();
             if (selectedHomeMarker) { map.removeLayer(selectedHomeMarker); selectedHomeMarker = null; }
             if (displacementLine) { map.removeLayer(displacementLine); displacementLine = null; }
+            window.clearRouteSlot('selection');
             selectedResId = null;
             renderResidentMarkers(allResidents);
 
@@ -633,6 +858,7 @@ export default function OfflineMap({
             if (res && res.lat && res.lng) {
               selectedResId = res.id;
               renderResidentMarkers(allResidents);
+              if (currentRole === 'rescuer') window.routeTo('selection', 'r:' + res.id, res.lat, res.lng, res.name || 'the resident', true);
 
               var homeLat = res.homeLat || res.lat;
               var homeLng = res.homeLng || res.lng;
@@ -691,7 +917,8 @@ export default function OfflineMap({
               disasterMarker = L.marker([p.lat, p.lng], { icon: icon, zIndexOffset: 1000 })
                 .addTo(map)
                 .bindPopup('<b>' + escapeHtml(p.label || 'Disaster') + '</b>' + (p.note ? '<br>' + escapeHtml(p.note) : ''));
-              map.flyTo([p.lat, p.lng], 16, { animate: true, duration: 0.8 });
+              if (myCoords) window.routeTo('disaster', 'd:' + (p.key || p.lat + ',' + p.lng), p.lat, p.lng, p.label || 'the disaster', true);
+              else map.flyTo([p.lat, p.lng], 16, { animate: true, duration: 0.8 });
               setTimeout(function() { if (disasterMarker) disasterMarker.openPopup(); }, 900);
             } else if (p.barangay) {
               var want = String(p.barangay).toLowerCase().replace(/[^a-z]/g, '');
@@ -702,10 +929,95 @@ export default function OfflineMap({
             }
           };
 
+          // ---------- Rescue unit coming to this resident (live, animated) ----------
+          var rescuerMarker = null, rescuerCircle = null, rescuerAnim = null, rescuerFitted = false;
+          function rescuerIcon(stale) {
+            return L.divIcon({
+              className: 'gps-dot-wrapper',
+              html: '<div class="unit-live' + (stale ? ' stale' : '') + '">🚑</div>',
+              iconSize: [30, 30], iconAnchor: [15, 15]
+            });
+          }
+          window.syncRescuer = function(p) {
+            if (!p || !p.lat || !p.lng) {
+              if (rescuerAnim) cancelAnimationFrame(rescuerAnim);
+              if (rescuerMarker) { map.removeLayer(rescuerMarker); rescuerMarker = null; }
+              if (rescuerCircle) { map.removeLayer(rescuerCircle); rescuerCircle = null; }
+              rescuerFitted = false;
+              return;
+            }
+            var label = '<b>🚑 ' + escapeHtml(p.label || 'Rescue unit') + '</b>' +
+              (p.accuracy ? '<br>GPS accuracy ±' + Math.round(p.accuracy) + ' m' : '') +
+              (p.stale ? '<br><i>Last known position</i>' : '');
+            if (!rescuerMarker) {
+              rescuerMarker = L.marker([p.lat, p.lng], { icon: rescuerIcon(p.stale), zIndexOffset: 1200 }).addTo(map).bindPopup(label);
+              rescuerCircle = L.circle([p.lat, p.lng], {
+                radius: p.accuracy || 0, color: '#DC2626', weight: 1, opacity: 0.4, fillOpacity: 0.08
+              }).addTo(map);
+              rescuerMarker._stale = Boolean(p.stale);
+            } else {
+              if (rescuerMarker._stale !== Boolean(p.stale)) {
+                rescuerMarker.setIcon(rescuerIcon(p.stale));
+                rescuerMarker._stale = Boolean(p.stale);
+              }
+              rescuerMarker.setPopupContent(label);
+              rescuerCircle.setRadius(p.accuracy || 0);
+              // Glide to the new fix instead of jumping.
+              var from = rescuerMarker.getLatLng(), to = L.latLng(p.lat, p.lng);
+              if (from.lat !== to.lat || from.lng !== to.lng) {
+                if (rescuerAnim) cancelAnimationFrame(rescuerAnim);
+                var t0 = null, dur = 1200;
+                var step = function(ts) {
+                  if (t0 === null) t0 = ts;
+                  var k = Math.min(1, (ts - t0) / dur);
+                  var e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+                  var ll = L.latLng(from.lat + (to.lat - from.lat) * e, from.lng + (to.lng - from.lng) * e);
+                  rescuerMarker.setLatLng(ll);
+                  rescuerCircle.setLatLng(ll);
+                  if (k < 1) rescuerAnim = requestAnimationFrame(step);
+                };
+                rescuerAnim = requestAnimationFrame(step);
+              }
+            }
+            // First time: show both the unit and this phone (or the resident's pin).
+            if (!rescuerFitted) {
+              rescuerFitted = true;
+              var other = myCoords || currentGpsCoords;
+              if (other && other.lat) map.fitBounds([[p.lat, p.lng], [other.lat, other.lng]], { padding: [80, 80], maxZoom: 17 });
+              else map.flyTo([p.lat, p.lng], 16, { animate: true, duration: 0.8 });
+            }
+          };
+
+          // ---------- Evacuation center reserved for this mission ----------
+          // Its route takes priority over the route to a selected pin.
+          var missionMarker = null, missionKey = null;
+          window.syncMission = function(t) {
+            if (!t || !t.lat || !t.lng) {
+              if (missionMarker) { map.removeLayer(missionMarker); missionMarker = null; }
+              if (missionKey) window.clearRouteSlot('mission');
+              missionKey = null;
+              return;
+            }
+            var isNew = missionKey !== t.key;
+            if (isNew) {
+              if (missionMarker) map.removeLayer(missionMarker);
+              missionMarker = L.marker([t.lat, t.lng], {
+                icon: L.divIcon({ className: 'gps-dot-wrapper', html: '<div class="mission-pin"><span>H</span></div>', iconSize: [30, 30], iconAnchor: [15, 30] }),
+                zIndexOffset: 1100
+              }).addTo(map).bindPopup('<b>🏫 ' + escapeHtml(t.name) + '</b><br>Reserved for this rescue');
+              missionKey = t.key;
+            }
+            // t.navigate: turn-by-turn and follow the phone; otherwise a route preview.
+            if (isNew || !route || route.slot !== 'mission' || Boolean(route.navigate) !== Boolean(t.navigate)) {
+              window.routeTo('mission', 'm:' + t.key, t.lat, t.lng, t.name || 'the evacuation center', isNew || !t.navigate, t.navigate);
+            }
+          };
+
           window.clearSelectionOverlays = function() {
             window.clearBarangayHighlight();
             if (selectedHomeMarker) { map.removeLayer(selectedHomeMarker); selectedHomeMarker = null; }
             if (displacementLine) { map.removeLayer(displacementLine); displacementLine = null; }
+            window.clearRouteSlot('selection');
             selectedResId = null;
             renderResidentMarkers(allResidents);
           };
@@ -741,7 +1053,7 @@ export default function OfflineMap({
         source={{ html }}
         style={styles.map}
         geolocationEnabled={true}
-        onLoadEnd={() => { focusedKey.current = null; pushStateToWebView(); }}
+        onLoadEnd={() => { focusedKey.current = null; focusedSelKey.current = null; pushStateToWebView(); }}
         onMessage={(event) => {
           try {
             const message = JSON.parse(event.nativeEvent.data);
