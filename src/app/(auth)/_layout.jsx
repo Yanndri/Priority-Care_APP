@@ -3,6 +3,7 @@ export default function AuthLayout() {
   return (
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="login" />
+      <Stack.Screen name="forgot-pin" />
       <Stack.Screen name="register" options={{ headerShown: true, title: 'Household Registration' }} />
     </Stack>
   );

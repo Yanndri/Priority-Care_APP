@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import BottomNav from '../../components/BottomNav';
+import ChangePasscode from '../../components/ChangePasscode';
 import { useSession } from '../../components/SessionProvider';
 import { signOut } from '../../services/api';
 import { useRescuerFeed } from '../../lib/rescuerFeed';
@@ -101,7 +102,8 @@ export default function RescuerProfileScreen() {
           )}
         </View>
 
-        <TouchableOpacity style={styles.logoutBtn} onPress={handleSignOut}>
+        <View style={{ marginTop: 'auto' }}><ChangePasscode isResident={false} /></View>
+        <TouchableOpacity style={[styles.logoutBtn, { marginTop: 0 }]} onPress={handleSignOut}>
           <Text style={styles.logoutText}>Sign out</Text>
         </TouchableOpacity>
       </View>

@@ -12,6 +12,7 @@ import {
 } from '../../services/api';
 import { getCurrentCoords } from '../../lib/location';
 import HomeLocationPicker from '../../components/HomeLocationPicker';
+import ChangePasscode from '../../components/ChangePasscode';
 
 // What the screen edits, built from get_my_profile.
 function formFromProfile(profile) {
@@ -111,7 +112,7 @@ export default function ResidentProfileScreen() {
         {
           text: 'Use my phone GPS',
           onPress: async () => {
-            const fix = await getCurrentCoords({ precise: true });
+            const fix = await getCurrentCoords({ precise: true, timeoutMs: 20000 });
             if (!fix) return Alert.alert('No GPS fix', 'Allow location access and try again outdoors or near a window.');
             setForm((p) => ({ ...p, homeLat: fix.lat, homeLng: fix.lng }));
             Alert.alert('Location saved 📍', `Set to:\nLat: ${fix.lat.toFixed(5)}, Lng: ${fix.lng.toFixed(5)}`);
@@ -243,6 +244,7 @@ export default function ResidentProfileScreen() {
           </View>
           <Text style={styles.headerSub}>Brgy. {form.barangay}{form.sitio ? ` • ${form.sitio}` : ''}</Text>
         </View>
+        <ChangePasscode isResident />
         <TouchableOpacity style={styles.btnLogout} onPress={handleLogout} activeOpacity={0.75}>
           <Text style={styles.btnLogoutText}>Log Out</Text>
         </TouchableOpacity>

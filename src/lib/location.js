@@ -2,18 +2,31 @@
 // when permission is refused or no fix is available.
 import * as Location from 'expo-location';
 
-export async function getCurrentCoords({ precise = false } = {}) {
+// Resolves to null after ms, so a missing GPS fix never blocks the caller (an SOS above all).
+const withTimeout = (promise, ms) => Promise.race([
+  promise.catch(() => null),
+  new Promise((resolve) => setTimeout(() => resolve(null), ms)),
+]);
+
+// Never waits longer than timeoutMs for a fresh fix (default 10 s when precise, 8 s otherwise).
+// Without a fresh fix it falls back to the phone's last known position (up to 30 min old),
+// then to null, so the caller can use the registered home location instead.
+export async function getCurrentCoords({ precise = false, timeoutMs } = {}) {
   try {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') return null;
     if (!precise) {
-      const last = await Location.getLastKnownPositionAsync({ maxAge: 5 * 60 * 1000 });
+      const last = await Location.getLastKnownPositionAsync({ maxAge: 5 * 60 * 1000 }).catch(() => null);
       if (last) return { lat: last.coords.latitude, lng: last.coords.longitude };
     }
-    const fix = await Location.getCurrentPositionAsync({
-      accuracy: precise ? Location.Accuracy.High : Location.Accuracy.Balanced,
-    });
-    return { lat: fix.coords.latitude, lng: fix.coords.longitude };
+    const fix = await withTimeout(
+      Location.getCurrentPositionAsync({
+        accuracy: precise ? Location.Accuracy.High : Location.Accuracy.Balanced,
+      }),
+      timeoutMs ?? (precise ? 10000 : 8000),
+    );
+    const pos = fix || (await Location.getLastKnownPositionAsync({ maxAge: 30 * 60 * 1000 }).catch(() => null));
+    return pos ? { lat: pos.coords.latitude, lng: pos.coords.longitude } : null;
   } catch {
     return null;
   }

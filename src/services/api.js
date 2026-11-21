@@ -121,6 +121,39 @@ export const signOut = async () => {
 };
 export const getMyProfile = () => call(supabase.rpc('get_my_profile'));
 
+// Forgot PIN (pin-reset Edge Function). Prototype: the SMS is simulated, so the
+// function returns the text message and the app shows it as a notification.
+async function pinReset(body) {
+  const { data, error } = await supabase.functions.invoke('pin-reset', { body });
+  if (error) {
+    const context = error.context;
+    const detail = context ? await context.json().catch(() => null) : null;
+    if (!detail && context?.status === 404) throw new Error('Forgot PIN is not set up on the server yet.');
+    throw new Error(detail?.error || friendly(error));
+  }
+  if (!data?.ok) throw new Error(data?.error || 'Something went wrong. Try again.');
+  return data;
+}
+export const requestPinResetCode = (contact) => pinReset({ action: 'send', contact: normalizeContact(contact) });
+export async function resetPinWithCode(contact, code, newPin) {
+  await pinReset({ action: 'verify', contact: normalizeContact(contact), code, new_pin: newPin });
+  return signInResident(contact, newPin);
+}
+
+// Change PIN (residents) or password (responders). The current one is checked first,
+// so someone holding an unlocked phone can't take over the account.
+export async function changeMyPasscode(current, next) {
+  const { data: { session } } = await supabase.auth.getSession();
+  const email = session?.user?.email;
+  if (!email) throw new Error('Please sign in again.');
+  const { error: checkError } = await supabase.auth.signInWithPassword({ email, password: current });
+  if (checkError) {
+    throw new Error(/invalid login credentials/i.test(checkError.message || '')
+      ? 'The current PIN or password is wrong.' : friendly(checkError));
+  }
+  await call(supabase.auth.updateUser({ password: next }));
+}
+
 // ---------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { signInResident, signInRescuer } from '../../services/api';
@@ -33,6 +33,20 @@ export default function LoginScreen() {
     } finally {
       setBusy(false);
     }
+  };
+
+  // Forgot PIN: households get a code by text (simulated in the prototype) on the Forgot PIN screen.
+  // Responders have no self-service reset yet: the MDRRMO resets it on the website.
+  const handleForgot = () => {
+    if (role === 'resident') {
+      router.push('/(auth)/forgot-pin');
+      return;
+    }
+    Alert.alert(
+      'Forgot your password?',
+      'Ask the MDRRMO (Super Admin) to reset it. They will check your ID and give you a new password.\n\n'
+        + 'After you sign in, you can change it under Profile > Change password.',
+    );
   };
 
   return (
@@ -83,6 +97,10 @@ export default function LoginScreen() {
           onChangeText={setPasscode}
         />
 
+        <TouchableOpacity onPress={handleForgot} style={styles.forgotBtn} accessibilityRole="button">
+          <Text style={styles.forgotText}>{role === 'resident' ? 'Forgot PIN?' : 'Forgot password?'}</Text>
+        </TouchableOpacity>
+
         {!!error && <Text style={styles.errorText}>{error}</Text>}
 
         <TouchableOpacity style={[styles.btnPrimary, busy && styles.btnDisabled]} onPress={handleLogin} disabled={busy}>
@@ -129,5 +147,7 @@ const styles = StyleSheet.create({
   errorText: { color: '#B91C1C', fontSize: 12, fontWeight: '700', marginBottom: 8 },
   btnSecondary: { marginTop: 14, alignItems: 'center', paddingVertical: 6 },
   btnSecondaryText: { color: '#1E3A8A', fontSize: 12, fontWeight: '800' },
+  forgotBtn: { alignSelf: 'flex-end', marginTop: -6, marginBottom: 10, paddingVertical: 4 },
+  forgotText: { color: '#1E3A8A', fontSize: 12, fontWeight: '800' },
   rescuerNote: { fontSize: 10.5, color: '#64748B', textAlign: 'center', marginTop: 12, lineHeight: 15 },
 });
