@@ -224,7 +224,7 @@ export default function ResidentProfileScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       {/* Top Header */}
       <View style={styles.topHeader}>
-        <View>
+        <View style={{ flex: 1, paddingRight: 8 }}>
           <View style={styles.headerTitleRow}>
             <Text style={styles.headerTitle}>Household Profile</Text>
             {profile?.is_verified
@@ -244,7 +244,6 @@ export default function ResidentProfileScreen() {
           </View>
           <Text style={styles.headerSub}>Brgy. {form.barangay}{form.sitio ? ` • ${form.sitio}` : ''}</Text>
         </View>
-        <ChangePasscode isResident />
         <TouchableOpacity style={styles.btnLogout} onPress={handleLogout} activeOpacity={0.75}>
           <Text style={styles.btnLogoutText}>Log Out</Text>
         </TouchableOpacity>
@@ -311,13 +310,18 @@ export default function ResidentProfileScreen() {
             <TouchableOpacity onPress={() => form.facadeUri && setShowPreview(true)} activeOpacity={0.8}>
               {form.facadeUri
                 ? <Image source={{ uri: form.facadeUri }} style={styles.facadeImg} />
-                : <View style={[styles.facadeImg, { alignItems: 'center', justifyContent: 'center', backgroundColor: '#F1F5F9' }]}><Text>🏠</Text></View>}
-              <View style={styles.zoomPill}><Text style={styles.zoomText}>🔍 View</Text></View>
+                : (
+                  <View style={[styles.facadeImg, { alignItems: 'center', justifyContent: 'center', backgroundColor: '#F1F5F9' }]}>
+                    <Text>🏠</Text>
+                    <Text style={styles.noPhotoText}>No photo yet</Text>
+                  </View>
+                )}
+              {form.facadeUri ? <View style={styles.zoomPill}><Text style={styles.zoomText}>🔍 View</Text></View> : null}
             </TouchableOpacity>
 
             <View style={styles.col}>
               <Text style={styles.facadeTitle}>Helps responders find your house</Text>
-              <Text style={styles.facadeDesc}>Tap photo to preview in full screen.</Text>
+              <Text style={styles.facadeDesc}>{form.facadeUri ? 'Tap the photo to see it full screen.' : 'Take a photo of the front of your house.'}</Text>
               <View style={styles.row}>
                 <TouchableOpacity style={styles.btnMedia} onPress={handleCamera}>
                   <Text style={styles.btnMediaText}>📷 Take Photo</Text>
@@ -369,6 +373,13 @@ export default function ResidentProfileScreen() {
             </Text>
           )}
         </TouchableOpacity>
+
+        {/* 3. Account: change the sign-in PIN */}
+        <View style={styles.card}>
+          <Text style={[styles.sectionTitle, { marginBottom: 4 }]}>3. ACCOUNT</Text>
+          <Text style={styles.facadeDesc}>Sign in with {form.contact || 'your number'} and your 6-digit PIN.</Text>
+          <View style={{ marginTop: 10 }}><ChangePasscode isResident /></View>
+        </View>
       </ScrollView>
 
       {/* Full-Screen Image Preview Modal */}
@@ -476,6 +487,7 @@ const styles = StyleSheet.create({
 
   facadeBox: { flexDirection: 'row', gap: 12, alignItems: 'center', backgroundColor: '#F8FAFC', padding: 10, borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', marginTop: 4 },
   facadeImg: { width: 72, height: 72, borderRadius: 8, borderWidth: 1, borderColor: '#CBD5E1' },
+  noPhotoText: { fontSize: 10, fontWeight: '700', color: '#64748B', marginTop: 2, textAlign: 'center' },
   zoomPill: { position: 'absolute', bottom: 3, left: 3, right: 3, backgroundColor: 'rgba(15,23,42,0.75)', borderRadius: 4, paddingVertical: 2, alignItems: 'center' },
   zoomText: { color: '#FFF', fontSize: FONT_SIZES.tiny, fontWeight: FONT_WEIGHTS.extraBold },
   facadeTitle: { fontSize: FONT_SIZES.body, fontWeight: FONT_WEIGHTS.extraBold, color: '#0F172A' },

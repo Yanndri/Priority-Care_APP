@@ -958,7 +958,7 @@ export default function OfflineMap({
               missionMarker = L.marker([t.lat, t.lng], {
                 icon: L.divIcon({ className: 'gps-dot-wrapper', html: '<div class="mission-pin"><span>H</span></div>', iconSize: [30, 30], iconAnchor: [15, 30] }),
                 zIndexOffset: 1100
-              }).addTo(map).bindPopup('<b>🏫 ' + escapeHtml(t.name) + '</b><br>Reserved for this rescue');
+              }).addTo(map).bindPopup('<b>🏫 ' + escapeHtml(t.name) + '</b><br>' + escapeHtml(t.note || 'Reserved for this rescue'));
               missionKey = t.key;
             }
             // t.navigate: turn-by-turn and follow the phone; otherwise a route preview.

@@ -14,6 +14,7 @@ import DisasterBanner from '../../components/DisasterBanner';
 import AtCentreCard from '../../components/AtCentreCard';
 import { useMyRescue, RescueStatusCard } from '../../components/RescueWatcher';
 import { getCurrentCoords, distanceMeters, formatDistance, shelterLoad } from '../../lib/location';
+import { useCenterAvailability } from '../../lib/centerAvailability';
 
 const clock = (iso) => {
   if (!iso) return '';
@@ -173,20 +174,40 @@ export default function ResidentDashboard() {
     ]);
   };
 
-  // Shelter suggestion: nearest open centre to home, or to where the resident is now when away.
+  // Room at each centre. Free spaces count seats reserved for households a rescuer is bringing in,
+  // the same numbers the server uses; until those load, fall back to the map's own counts.
+  const avail = useCenterAvailability();
+  const roomOf = (c) => {
+    const a = avail.byId[c.center_id];
+    const capacity = a?.capacity ?? (Number(c.capacity) || 0);
+    const taken = a ? a.occupied + a.reserved : Number(c.occupied) || 0;
+    const free = a ? a.available : Math.max(0, capacity - taken);
+    return { capacity, free, load: shelterLoad({ capacity, occupied: capacity - free }) };
+  };
   const withDistance = (from) => centers
-    .map((c) => ({ ...c, distance: distanceMeters(from, { lat: Number(c.latitude), lng: Number(c.longitude) }) }))
-    .filter((c) => shelterLoad(c).label !== 'FULL')
+    .map((c) => ({ ...c, ...roomOf(c), distance: distanceMeters(from, { lat: Number(c.latitude), lng: Number(c.longitude) }) }))
     .sort((a, b) => (a.distance ?? 1e12) - (b.distance ?? 1e12));
-  // The barangay's designated shelter (shelter plan) comes first while it has room.
+  const hasRoom = (c) => c.free > 0;
+  // Shelter suggestion: the barangay's designated shelter (shelter plan) while it has room, else the
+  // nearest centre with room to home; when away from home, the nearest one to where the resident is now.
   const designatedId = plan?.centers?.find((c) => c.is_primary)?.center_id;
-  const designated = withDistance(homeCoords).find((c) => c.center_id === designatedId);
-  const homeShelter = designated || withDistance(homeCoords)[0];
-  const nearestShelter = withDistance(currentGps || homeCoords)[0];
+  const designated = withDistance(homeCoords).filter(hasRoom).find((c) => c.center_id === designatedId);
+  const homeShelter = designated || withDistance(homeCoords).filter(hasRoom)[0];
+  // The designated shelter when it is open but has no room, so the resident knows why another one is suggested.
+  const designatedFull = designatedId != null && !designated ? centers.find((c) => c.center_id === designatedId) : null;
+  const nearestShelter = withDistance(currentGps || homeCoords).filter(hasRoom)[0];
   const suggested = isDisplaced ? nearestShelter : homeShelter;
-  const sortedCenters = centers
-    .map((c) => ({ ...c, distance: distanceMeters(currentGps || homeCoords, { lat: Number(c.latitude), lng: Number(c.longitude) }) }))
-    .sort((a, b) => (a.distance ?? 1e12) - (b.distance ?? 1e12));
+  // All centres from where the resident is: ones with room first (nearest first), full ones last.
+  const sortedCenters = withDistance(currentGps || homeCoords)
+    .sort((a, b) => Number(!hasRoom(a)) - Number(!hasRoom(b)));
+  // Already checked in at (or on the way to) a centre: that centre is the one to show, not another.
+  const meAtCentre = people.find((p) => p.kind === 'resident' && ['safely_evacuated', 'in_transit'].includes(p.evac_status));
+  const myCentre = meAtCentre ? sortedCenters.find((c) => c.center_name === meAtCentre.center_name) : null;
+  const goTo = myCentre || suggested;
+  const showTheWay = (c) => router.push({ pathname: '/(resident)/evac-map', params: { goCenterId: String(c.center_id), goCenterTs: String(Date.now()) } });
+  const roomText = (c, here = false) => (c.free <= 0
+    ? (here ? 'Full' : 'Full. Choose another shelter.')
+    : `${c.free} ${c.free === 1 ? 'space' : 'spaces'} left${c.load.label === 'NEAR CAPACITY' ? ', filling up' : ''}`);
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -345,72 +366,101 @@ export default function ResidentDashboard() {
           contentContainerStyle={{ padding: 14 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         >
-          <View style={[styles.card, { backgroundColor: isDisplaced ? '#FFFBEB' : '#EFF6FF', borderColor: isDisplaced ? '#FDE68A' : '#BFDBFE' }]}>
-            <Text style={[styles.label, { color: isDisplaced ? '#B45309' : '#1E3A8A' }]}>
-              {isDisplaced ? '🏃 YOU ARE AWAY FROM HOME' : designated ? "★ YOUR BARANGAY'S SHELTER" : '🏠 NEAREST OPEN SHELTER TO YOUR HOME'}
+          {/* 1. Where to go: one clear shelter with a button that shows the way. */}
+          <View style={[styles.goCard, isDisplaced && !myCentre && styles.goCardAway]}>
+            <Text style={[styles.label, { color: isDisplaced && !myCentre ? '#B45309' : '#1E3A8A' }]}>
+              {myCentre ? (meAtCentre.evac_status === 'in_transit' ? 'YOU ARE ON THE WAY TO' : 'YOU ARE CHECKED IN AT')
+                : !goTo ? 'EVACUATION CENTRES'
+                : isDisplaced ? `YOU ARE AWAY FROM HOME${distFromHome != null ? ` (${formatDistance(distFromHome)})` : ''}`
+                : designated ? "YOUR BARANGAY'S SHELTER" : 'NEAREST SHELTER WITH ROOM'}
             </Text>
-            <Text style={[styles.val, { fontSize: 13 }]}>
-              {!suggested
-                ? 'No evacuation centre is open right now.'
-                : isDisplaced
-                  ? `You are ${formatDistance(distFromHome)} from home. The nearest shelter is ${suggested.center_name}`
-                  : `${suggested.center_name} (${formatDistance(suggested.distance)})`}
-            </Text>
+            {goTo ? (
+              <>
+                <Text style={styles.goName}>{goTo.center_name}</Text>
+                <Text style={styles.goMeta}>
+                  {[goTo.distance != null ? `${formatDistance(goTo.distance)} away` : null, roomText(goTo, Boolean(myCentre))].filter(Boolean).join(' • ')}
+                </Text>
+                {!myCentre && isDisplaced && <Text style={styles.goNote}>This is the nearest shelter to where you are now.</Text>}
+                {!myCentre && !isDisplaced && designatedFull && (
+                  <Text style={styles.goNote}>Your barangay's shelter, {designatedFull.center_name}, is full, so this is the nearest one with room.</Text>
+                )}
+                <TouchableOpacity style={styles.goBtn} onPress={() => showTheWay(goTo)} accessibilityRole="button">
+                  <Text style={styles.goBtnText}>{myCentre ? '🗺️ Show it on the map' : '🧭 Show me the way'}</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <Text style={[styles.goMeta, { marginTop: 4 }]}>
+                {centers.length ? 'Every shelter is full right now. Stay where you are safe, or send an SOS if you need help.'
+                  : 'No evacuation centre is open right now. If you need help, send an SOS.'}
+              </Text>
+            )}
           </View>
 
-          {/* Household Roster */}
-          <View style={styles.card}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-              <Text style={styles.label}>HOUSEHOLD MEMBERS (TAP TO REPORT MISSING)</Text>
-              <TouchableOpacity onPress={() => router.push('/(resident)/profile')}>
-                <Text style={{ color: '#1E3A8A', fontWeight: FONT_WEIGHTS.extraBold, fontSize: FONT_SIZES.caption }}>+ Edit</Text>
+          {/* 2. Every open shelter: tap one to see the way there. */}
+          {sortedCenters.length > 0 && (
+            <Text style={[styles.sectionHeader, { marginTop: 4 }]}>ALL SHELTERS ({sortedCenters.length})</Text>
+          )}
+          {sortedCenters.map((s) => {
+            const full = !hasRoom(s);
+            const isSuggested = goTo?.center_id === s.center_id;
+            return (
+              <TouchableOpacity key={s.center_id} style={[styles.card, full && styles.cardFull, isSuggested && styles.cardSuggested]}
+                onPress={() => showTheWay(s)} accessibilityRole="button"
+                accessibilityLabel={`${s.center_name}. ${roomText(s)} Show the way.`}>
+                {isSuggested && <Text style={styles.suggestTag}>{myCentre ? '✓ YOU ARE HERE' : '★ SUGGESTED FOR YOU'}</Text>}
+                <View style={styles.shelterHeaderRow}>
+                  <Text style={[styles.shelterTitle, full && { color: '#64748B' }]}>{s.center_name}</Text>
+                  <Text style={[styles.shelterPercent, { color: s.load.color }]}>{full ? 'FULL' : s.load.label}</Text>
+                </View>
+                <Text style={[styles.roomText, full && { color: '#B91C1C' }]}>{roomText(s, isSuggested && Boolean(myCentre))}</Text>
+                <View style={styles.barBg}>
+                  <View style={{ height: '100%', width: `${s.load.percent}%`, backgroundColor: s.load.color }} />
+                </View>
+                <View style={styles.shelterFoot}>
+                  <Text style={styles.sub}>{s.distance != null ? `📍 ${formatDistance(s.distance)} away` : ' '}</Text>
+                  <Text style={styles.wayLink}>Show the way ›</Text>
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+
+          {/* 3. The household: where everyone is, with a separate button to report someone missing. */}
+          <View style={[styles.card, { marginTop: 6 }]}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
+              <Text style={styles.sectionHeader}>YOUR HOUSEHOLD</Text>
+              <TouchableOpacity onPress={() => router.push('/(resident)/profile')} accessibilityRole="button" hitSlop={8}>
+                <Text style={styles.editLink}>Edit</Text>
               </TouchableOpacity>
             </View>
             {people.map((m) => {
               const badge = personBadge(m);
+              const missing = badge === 'MISSING';
               return (
-                <TouchableOpacity
-                  key={m.member_id || m.uid}
-                  style={styles.memberRow}
-                  onPress={() => handleToggleMissing(m)}
-                  disabled={m.kind !== 'member'}
-                >
+                <View key={m.member_id || m.uid} style={styles.memberRow}>
                   <View style={{ flex: 1, paddingRight: 8 }}>
                     <Text style={styles.val}>{m.name}</Text>
                     <Text style={styles.sub}>
-                      {[m.kind === 'resident' ? 'Account holder' : m.relationship, MOBILITY_LABELS[m.mobility], m.center_name]
+                      {[m.kind === 'resident' ? 'You' : m.relationship, MOBILITY_LABELS[m.mobility],
+                        // The centre only while they are there or on the way, not after they went home.
+                        ['safely_evacuated', 'in_transit'].includes(m.evac_status) ? `at ${m.center_name}` : null]
                         .filter(Boolean).join(' • ')}
                     </Text>
                   </View>
-                  <View style={[styles.badge, badge === 'MISSING' ? styles.bgDanger : styles.bgNeutral]}>
-                    <Text style={[styles.badgeText, badge === 'MISSING' && { color: '#B91C1C' }]}>{badge}</Text>
+                  <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                    <View style={[styles.badge, missing ? styles.bgDanger : styles.bgNeutral]}>
+                      <Text style={[styles.badgeText, missing && { color: '#B91C1C' }]}>{badge}</Text>
+                    </View>
+                    {m.kind === 'member' && (
+                      <TouchableOpacity style={[styles.missingBtn, missing && styles.foundBtn]} onPress={() => handleToggleMissing(m)}
+                        accessibilityRole="button" accessibilityLabel={missing ? `Mark ${m.name} as found` : `Report ${m.name} missing`}>
+                        <Text style={[styles.missingBtnText, missing && { color: '#15803D' }]}>{missing ? 'Mark found' : 'Report missing'}</Text>
+                      </TouchableOpacity>
+                    )}
                   </View>
-                </TouchableOpacity>
+                </View>
               );
             })}
           </View>
-
-          <Text style={[styles.sectionHeader, { marginTop: 12 }]}>LIVE SHELTER CAPACITY</Text>
-          {sortedCenters.length === 0 && <Text style={styles.sub}>No evacuation centre is open right now.</Text>}
-          {sortedCenters.map((s) => {
-            const occ = shelterLoad(s);
-            return (
-              <View key={s.center_id} style={styles.card}>
-                <View style={styles.shelterHeaderRow}>
-                  <Text style={styles.shelterTitle}>{s.center_name}</Text>
-                  <Text style={[styles.shelterPercent, { color: occ.color }]}>
-                    {occ.percent}% • {occ.label}
-                  </Text>
-                </View>
-                <Text style={styles.sub}>
-                  {s.distance != null ? `📍 ${formatDistance(s.distance)} • ` : ''}{s.occupied}/{s.capacity} Occupied ({Math.max(0, s.capacity - s.occupied)} Slots Left)
-                </Text>
-                <View style={styles.barBg}>
-                  <View style={{ height: '100%', width: `${occ.percent}%`, backgroundColor: occ.color }} />
-                </View>
-              </View>
-            );
-          })}
         </ScrollView>
       )}
 
@@ -595,6 +645,23 @@ const styles = StyleSheet.create({
   shelterHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 4 },
   shelterTitle: { flex: 1, fontSize: FONT_SIZES.bodyBold, fontWeight: FONT_WEIGHTS.extraBold, color: '#0F172A' },
   shelterPercent: { fontSize: FONT_SIZES.caption, fontWeight: FONT_WEIGHTS.extraBold, flexShrink: 0 },
+  goCard: { backgroundColor: '#EFF6FF', borderColor: '#BFDBFE', borderWidth: 1, borderRadius: 12, padding: 14, marginBottom: 14 },
+  goCardAway: { backgroundColor: '#FFFBEB', borderColor: '#FDE68A' },
+  goName: { fontSize: 20, fontWeight: FONT_WEIGHTS.black, color: '#0F172A' },
+  goMeta: { fontSize: FONT_SIZES.caption, fontWeight: FONT_WEIGHTS.bold, color: '#334155', marginTop: 2 },
+  goNote: { fontSize: FONT_SIZES.tiny, color: '#475569', marginTop: 6 },
+  goBtn: { backgroundColor: '#1E3A8A', borderRadius: 10, paddingVertical: 12, alignItems: 'center', marginTop: 12 },
+  goBtnText: { color: '#FFF', fontSize: 16, fontWeight: FONT_WEIGHTS.black },
+  cardFull: { backgroundColor: '#F8FAFC', opacity: 0.85 },
+  cardSuggested: { borderColor: '#1E3A8A', borderWidth: 1.5 },
+  suggestTag: { fontSize: FONT_SIZES.tiny, fontWeight: FONT_WEIGHTS.black, color: '#1E3A8A', marginBottom: 4 },
+  roomText: { fontSize: FONT_SIZES.caption, fontWeight: FONT_WEIGHTS.bold, color: '#334155' },
+  shelterFoot: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 },
+  wayLink: { fontSize: FONT_SIZES.caption, fontWeight: FONT_WEIGHTS.extraBold, color: '#1E3A8A' },
+  editLink: { color: '#1E3A8A', fontWeight: FONT_WEIGHTS.extraBold, fontSize: FONT_SIZES.caption, marginBottom: 8 },
+  missingBtn: { borderWidth: 1, borderColor: '#FCA5A5', backgroundColor: '#FFF', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 },
+  foundBtn: { borderColor: '#86EFAC' },
+  missingBtnText: { fontSize: FONT_SIZES.tiny, fontWeight: FONT_WEIGHTS.extraBold, color: '#B91C1C' },
   barBg: { height: 6, backgroundColor: '#E2E8F0', borderRadius: 3, overflow: 'hidden', marginTop: 6 },
 
   modalBg: { flex: 1, backgroundColor: 'rgba(15,23,42,0.7)', justifyContent: 'center', padding: 18 },

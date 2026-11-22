@@ -368,6 +368,10 @@ export const admitWalkIn = ({ centerId, name, barangayId = null, sitio = '', hea
 export const getMissionStatus = (ticketId) => call(supabase.rpc('get_mission_status', { p_ticket_id: ticketId }));
 export const getMyRescueTracking = () => call(supabase.rpc('get_my_rescue_tracking'));
 export const getCenterAvailability = () => call(supabase.rpc('get_center_availability'));
+// Who is inside a center (rescuers: any center; barangay staff: their own), and checking people out.
+export const getCenterRoster = (centerId) => call(supabase.rpc('get_center_roster', { p_center_id: centerId }));
+export const checkOutEvacuees = (centerId, recordIds) =>
+  call(supabase.rpc('check_out_evacuees', { p_center_id: centerId, p_record_ids: recordIds }));
 // Rescuer confirms arrival at the resident (the resident is told).
 export const confirmResidentLocated = (ticketId, fix) =>
   call(supabase.rpc('confirm_resident_located', {

@@ -7,6 +7,7 @@ import { useRouter } from 'expo-router';
 import { getMyPreemptive, reportMyPreemptive, onLiveSignal } from '../../services/api';
 import { useSession } from '../../components/SessionProvider';
 import { useActiveDisasters } from '../../components/DisasterBanner';
+import { useCenterAvailability, freeLabel } from '../../lib/centerAvailability';
 
 const STATUSES = [
   { id: 'staying_home', icon: '🏠', label: 'Staying home', hint: 'We are safe where we are.' },
@@ -42,6 +43,7 @@ export default function EvacuateScreen() {
   const { profile } = useSession();
   const myBarangay = profile?.resident?.barangay_id ?? null;
   const { events: activeDisasters } = useActiveDisasters({ barangayId: myBarangay, enabled: myBarangay != null });
+  const avail = useCenterAvailability();
 
   const load = useCallback(async () => {
     try {
@@ -61,7 +63,9 @@ export default function EvacuateScreen() {
       const latest = next.latest;
       setHeadcount(latest?.headcount || next.household_size || 1);
       if (latest?.destination_type) setDestType(latest.destination_type);
-      setCenterId(latest?.destination_center_id ?? next.centers?.find((c) => c.is_primary)?.center_id ?? next.centers?.[0]?.center_id ?? null);
+      // The rescuer's or resident's last choice, else the barangay's designated shelter, else its backups.
+      setCenterId(latest?.destination_center_id ?? next.centers?.find((c) => c.is_primary)?.center_id
+        ?? next.centers?.find((c) => c.assigned)?.center_id ?? next.centers?.[0]?.center_id ?? null);
       if (latest?.destination_address) setAddress(latest.destination_address);
     });
     return onLiveSignal(['events', 'centers', 'shelter_plans', 'preemptive'], load);
@@ -82,6 +86,21 @@ export default function EvacuateScreen() {
     const withDest = needsDestination(status);
     if (withDest && destType === 'evacuation_center' && !centerId) return Alert.alert('Choose a centre', 'Tap the evacuation centre you are going to.');
     if (withDest && destType !== 'evacuation_center' && !address.trim()) return Alert.alert('Where are you going?', 'Type the address or place.');
+    // Heading to a centre that has no room: warn once, but still allow it (the barangay decides).
+    const room = withDest && destType === 'evacuation_center' ? avail.byId[centerId] : null;
+    if (room && room.available < headcount && ['preparing', 'evacuating'].includes(status) && !confirmed) {
+      const name = centers.find((c) => c.center_id === centerId)?.center_name || 'This centre';
+      return Alert.alert(
+        room.available <= 0 ? `${name} is full` : `${name} is almost full`,
+        room.available <= 0
+          ? 'There are no spaces left there right now. Choose another centre if you can.'
+          : `Only ${room.available} spaces are left for your ${headcount} people. Choose another centre if you can.`,
+        [
+          { text: 'Choose another', style: 'cancel' },
+          { text: 'Go there anyway', onPress: () => submit(true) },
+        ],
+      );
+    }
     setBusy(true);
     try {
       const next = await reportMyPreemptive({
@@ -176,6 +195,11 @@ export default function EvacuateScreen() {
                       <Text style={[styles.optionText, centerId === c.center_id && styles.optionTextOn]}>{c.center_name}</Text>
                       {c.is_primary ? <Text style={styles.tag}>★ Your barangay's designated shelter</Text>
                         : c.assigned ? <Text style={styles.tagAlt}>Backup shelter for your barangay</Text> : null}
+                      {avail.byId[c.center_id] && (
+                        <Text style={[styles.room, avail.byId[c.center_id].available < headcount && styles.roomLow]}>
+                          {freeLabel(avail.byId[c.center_id])}
+                        </Text>
+                      )}
                     </View>
                   </TouchableOpacity>
                 ))
@@ -229,6 +253,8 @@ const styles = StyleSheet.create({
   label: { fontSize: 13, color: '#64748B', fontWeight: '600' },
   value: { fontSize: 17, color: '#0F172A', fontWeight: '800' },
   muted: { fontSize: 14, color: '#475569' },
+  room: { fontSize: 14, color: '#15803D', fontWeight: '700', marginTop: 2 },
+  roomLow: { color: '#B91C1C' },
   section: { fontSize: 17, fontWeight: '800', color: '#0F172A', marginTop: 6 },
   option: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#FFF', borderRadius: 10, padding: 14, borderWidth: 2, borderColor: '#E2E8F0', minHeight: 56 },
   optionOn: { borderColor: '#1D4ED8', backgroundColor: '#EFF6FF' },
