@@ -16,7 +16,7 @@ const STATUSES = [
   { id: 'returned_home', icon: '↩️', label: 'Back home', hint: 'It is safe and we went home.' },
 ];
 const DESTINATIONS = [
-  { id: 'evacuation_center', label: 'Evacuation centre' },
+  { id: 'evacuation_center', label: 'Evacuation center' },
   { id: 'relative_friend', label: "Relative's or friend's house" },
   { id: 'other', label: 'Somewhere else' },
 ];
@@ -37,8 +37,8 @@ export default function EvacuateScreen() {
   const [address, setAddress] = useState('');
   const [headcount, setHeadcount] = useState(1);
   const [note, setNote] = useState('');
-  // Leaving a centre while the disaster is still declared needs a second tap (it is allowed:
-  // people do leave, and recording it keeps the centre's count right).
+  // Leaving a center while the disaster is still declared needs a second tap (it is allowed:
+  // people do leave, and recording it keeps the center's count right).
   const { profile } = useSession();
   const myBarangay = profile?.resident?.barangay_id ?? null;
   const { events: activeDisasters } = useActiveDisasters({ barangayId: myBarangay, enabled: myBarangay != null });
@@ -80,7 +80,7 @@ export default function EvacuateScreen() {
       );
     }
     const withDest = needsDestination(status);
-    if (withDest && destType === 'evacuation_center' && !centerId) return Alert.alert('Choose a centre', 'Tap the evacuation centre you are going to.');
+    if (withDest && destType === 'evacuation_center' && !centerId) return Alert.alert('Choose a center', 'Tap the evacuation center you are going to.');
     if (withDest && destType !== 'evacuation_center' && !address.trim()) return Alert.alert('Where are you going?', 'Type the address or place.');
     setBusy(true);
     try {
@@ -169,13 +169,12 @@ export default function EvacuateScreen() {
                 ))}
               </View>
               {destType === 'evacuation_center' ? (
-                centers.length === 0 ? <Text style={styles.muted}>No evacuation centre is open right now.</Text> :
+                centers.length === 0 ? <Text style={styles.muted}>No evacuation center is open right now.</Text> :
                 centers.map((c) => (
                   <TouchableOpacity key={c.center_id} style={[styles.option, centerId === c.center_id && styles.optionOn]} onPress={() => setCenterId(c.center_id)}>
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.optionText, centerId === c.center_id && styles.optionTextOn]}>{c.center_name}</Text>
-                      {c.is_primary ? <Text style={styles.tag}>★ Your barangay's designated shelter</Text>
-                        : c.assigned ? <Text style={styles.tagAlt}>Backup shelter for your barangay</Text> : null}
+                      {c.is_primary ? <Text style={styles.tag}>★ Nearest open center to your home</Text> : null}
                     </View>
                   </TouchableOpacity>
                 ))
@@ -236,7 +235,6 @@ const styles = StyleSheet.create({
   optionText: { fontSize: 16, fontWeight: '700', color: '#0F172A' },
   optionTextOn: { color: '#1D4ED8' },
   tag: { fontSize: 13, fontWeight: '700', color: '#15803D', marginTop: 2 },
-  tagAlt: { fontSize: 13, fontWeight: '600', color: '#475569', marginTop: 2 },
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: { paddingVertical: 10, paddingHorizontal: 14, borderRadius: 20, borderWidth: 1, borderColor: '#CBD5E1', backgroundColor: '#FFF' },
   chipOn: { backgroundColor: '#1D4ED8', borderColor: '#1D4ED8' },

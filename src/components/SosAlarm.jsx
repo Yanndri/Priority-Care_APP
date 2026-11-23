@@ -6,7 +6,7 @@ import { Modal, View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { useRouter } from 'expo-router';
 import { prepareAlarm, soundAlarm, stopAlarm, onAlarmTap } from '../lib/alarm';
 import { getRescuerFeed, listBarangays, onLiveSignal, subscribe } from '../services/api';
-import { EMERGENCY_TYPES } from '../constants/mockData';
+import { EMERGENCY_TYPES } from '../constants/options';
 
 const POLL_MS = 15000;
 

@@ -6,7 +6,7 @@ import OfflineMap from '../../components/offlineMap';
 import { isInCordova, OUTSIDE_CORDOVA_MESSAGE } from '../../lib/cordovaArea';
 import BottomNav from '../../components/BottomNav';
 import { useSession } from '../../components/SessionProvider';
-import { HAZARD_OPTIONS } from '../../constants/mockData';
+import { HAZARD_OPTIONS } from '../../constants/options';
 import { FONT_SIZES, FONT_WEIGHTS } from '../../constants/typography';
 import { getMyHazardReports, getNearbyHazards, getPublicMap, reportHazard, subscribe, withdrawMyHazard } from '../../services/api';
 import { getCurrentCoords, distanceMeters, watchCoords } from '../../lib/location';
@@ -14,7 +14,7 @@ import { toMapHazard, toMapShelter } from '../../lib/mapData';
 import { useMyRescue, centerTargetOf, RescueStatusCard } from '../../components/RescueWatcher';
 import { getDemoSpot, getSharedLocation, setDemoSpot, setSharedLocation } from '../../lib/sharedLocation';
 
-// Cordova town centre, used only when the account has no saved home location.
+// Cordova town center, used only when the account has no saved home location.
 const TOWN_CENTRE = { lat: 10.2546, lng: 123.952 };
 
 export default function ResidentEvacMapScreen() {
@@ -216,7 +216,7 @@ export default function ResidentEvacMapScreen() {
       <View style={[styles.topBar, { paddingTop: insets.top + 6 }]}>
         <View style={styles.headerTextGroup}>
           <Text style={styles.sub}>CORDOVA</Text>
-          <Text style={styles.title} numberOfLines={1}>Hazard & shelter map</Text>
+          <Text style={styles.title} numberOfLines={1}>Hazard & evacuation center map</Text>
         </View>
         <TouchableOpacity
           style={[styles.badgeGps, isDisplaced && { backgroundColor: '#FEF3C7' }]}
@@ -231,7 +231,7 @@ export default function ResidentEvacMapScreen() {
       <View style={styles.legendBar}>
         <Text style={styles.legendText}>🏠 My Home</Text>
         <Text style={styles.legendText}>🔵 My GPS ({gpsMode})</Text>
-        <Text style={styles.legendText}>🟦 Shelter [H]</Text>
+        <Text style={styles.legendText}>🟦 Evacuation center [H]</Text>
       </View>
 
       <RescueStatusCard mission={rescue.mission} online={rescue.online} style={{ marginHorizontal: 10, marginTop: 6 }} />

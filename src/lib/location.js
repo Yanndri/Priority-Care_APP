@@ -80,7 +80,7 @@ export async function getLocationFix({ timeoutMs = 15000 } = {}) {
   }
 }
 
-// Straight-line distance in metres; null when either point is missing.
+// Straight-line distance in meters; null when either point is missing.
 export function distanceMeters(a, b) {
   if (!a || !b || a.lat == null || a.lng == null || b.lat == null || b.lng == null) return null;
   const R = 6371e3;
@@ -94,7 +94,7 @@ export function distanceMeters(a, b) {
 
 export const formatDistance = (m) => (m == null ? '' : m < 1000 ? `${m} m` : `${(m / 1000).toFixed(1)} km`);
 
-// Occupancy colour and label used by every shelter card.
+// Occupancy color and label used by every shelter card.
 export function shelterLoad(center) {
   const capacity = Number(center.capacity) || 0;
   const occupied = Number(center.occupied) || 0;

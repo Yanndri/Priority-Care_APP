@@ -1,5 +1,5 @@
 // Converts database rows into the shapes the map (components/offlineMap) draws.
-import { HAZARD_OPTIONS } from '../constants/mockData';
+import { HAZARD_OPTIONS } from '../constants/options';
 
 export const HAZARD_ICONS = Object.fromEntries(HAZARD_OPTIONS.map((h) => [h.id, h.icon]));
 
@@ -31,6 +31,6 @@ export const toMapShelter = (c) => ({
 
 const CENTER_TYPE_LABELS = {
   school: 'School', covered_court: 'Covered court', barangay_hall: 'Barangay hall', church: 'Church',
-  makeshift: 'Temporary shelter', other: 'Evacuation centre',
+  makeshift: 'Temporary evacuation center', other: 'Evacuation center',
 };
 export const centerTypeLabel = (type) => (type ? CENTER_TYPE_LABELS[type] || type.replace(/_/g, ' ') : null);

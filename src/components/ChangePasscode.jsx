@@ -6,7 +6,7 @@ import { changeMyPasscode } from '../services/api';
 
 const WEAK_PINS = /^(\d)\1{5}$|^(012345|123456|234567|345678|456789|987654|876543|765432|654321|543210)$/;
 
-export default function ChangePasscode({ isResident }) {
+export default function ChangePasscode({ isResident, style }) {
   const [open, setOpen] = useState(false);
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
@@ -52,7 +52,7 @@ export default function ChangePasscode({ isResident }) {
 
   return (
     <>
-      <TouchableOpacity style={styles.button} onPress={() => setOpen(true)} activeOpacity={0.75}>
+      <TouchableOpacity style={[styles.button, style]} onPress={() => setOpen(true)} activeOpacity={0.75}>
         <Text style={styles.buttonText}>🔑 Change {word}</Text>
       </TouchableOpacity>
       <Modal visible={open} transparent animationType="fade" onRequestClose={close}>

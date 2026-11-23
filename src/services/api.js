@@ -78,7 +78,7 @@ export const residentLoginEmail = (contact) => `${normalizeContact(contact)}@res
 
 function friendly(error) {
   const message = error?.message || String(error);
-  if (/invalid login credentials/i.test(message)) return 'Wrong contact number / email or PIN / password.';
+  if (/invalid login credentials/i.test(message)) return 'Wrong mobile number / email or PIN / password.';
   if (/network request failed|fetch failed/i.test(message)) return 'No connection to the server. Check your internet and try again.';
   return message;
 }
@@ -89,7 +89,7 @@ async function call(promise) {
 }
 
 export async function signInResident(contact, pin) {
-  if (!/^09\d{9}$/.test(normalizeContact(contact))) throw new Error('Enter your mobile number like 09171234567.');
+  if (!/^09\d{9}$/.test(normalizeContact(contact))) throw new Error('Enter a mobile number like 0917 123 4567 or +63 917 123 4567.');
   await call(supabase.auth.signInWithPassword({ email: residentLoginEmail(contact), password: pin }));
   return assertRole('resident');
 }
@@ -105,7 +105,7 @@ async function assertRole(role) {
     await supabase.auth.signOut();
     throw new Error(role === 'resident'
       ? 'This login is not a household account.'
-      : 'This login is not a rescuer account. Admins use the web console.');
+      : 'This login is not a responder account. Admins use the website.');
   }
   if (profile.account_status !== 'active') {
     await supabase.auth.signOut();
@@ -160,6 +160,10 @@ export async function changeMyPasscode(current, next) {
 
 export const listBarangays = () =>
   call(supabase.from('barangays').select('barangay_id,barangay_name,center_lat,center_lng').order('barangay_name'));
+
+// Official sitio names of one barangay (staff keep the list on the web "Sitios & Population" page).
+export const listSitios = (barangayId) =>
+  call(supabase.from('sitios').select('sitio_name').eq('barangay_id', barangayId).order('sitio_name'));
 
 export const listDocumentTypes = () =>
   call(supabase.from('document_types').select('type_id,type_name,code').order('type_id'));
@@ -278,14 +282,14 @@ export const setMemberMissing = (memberId, missing, note = '') =>
   call(supabase.rpc('set_my_member_missing', { p_member_id: memberId, p_missing: missing, p_note: note }));
 export const updateMyHousehold = (changes) => call(supabase.rpc('update_my_household', { p: changes }));
 export const getPublicMap = () => call(supabase.rpc('get_public_map'));
-// Pre-emptive evacuation (barangay's designated shelter first in centers[]).
+// Pre-emptive evacuation (nearest open center with room first in centers[]).
 export const getMyPreemptive = () => call(supabase.rpc('get_my_preemptive_evacuation'));
 export const reportMyPreemptive = ({ status, destinationType = null, centerId = null, address = '', headcount = null, note = '' }) =>
   call(supabase.rpc('report_my_preemptive_evacuation', {
     p_status: status, p_destination_type: destinationType, p_center_id: centerId,
     p_destination_address: address, p_headcount: headcount, p_note: note,
   }));
-// Check out of an evacuation centre (STEP 28). people: uids / member_ids leaving, or null for everyone.
+// Check out of an evacuation center (STEP 28). people: uids / member_ids leaving, or null for everyone.
 // Before STEP 28 is run, "everyone" still works through the household's "Back home" report.
 export async function checkOutMyHousehold(people = null) {
   try {
@@ -333,7 +337,7 @@ export const recordEvacuation = (person, centerId, status) =>
   }));
 // Backup requests (STEP 20): the assigned unit asks for extra help; the web shows them.
 export const BACKUP_NEEDS = {
-  boat: { icon: '🚤', label: 'Rescue boat', desc: 'For flood water deeper than 1 metre.' },
+  boat: { icon: '🚤', label: 'Rescue boat', desc: 'For flood water deeper than 1 meter.' },
   ambulance: { icon: '🚑', label: 'Ambulance', desc: 'For several injured people or a serious case.' },
   stretcher: { icon: '🛏️', label: 'Stretcher / spine board', desc: 'For bedridden or badly injured people.' },
   road_clearing: { icon: '🪓', label: 'Road clearing', desc: 'A fallen tree or debris is blocking the way.' },
@@ -369,6 +373,9 @@ export const getMissionStatus = (ticketId) => call(supabase.rpc('get_mission_sta
 export const getMyRescueTracking = () => call(supabase.rpc('get_my_rescue_tracking'));
 export const getCenterAvailability = () => call(supabase.rpc('get_center_availability'));
 // Rescuer confirms arrival at the resident (the resident is told).
+// Undo a mis-tapped "Accept & go" or "I'm with them" (STEP35). Logged in the ticket history.
+export const undoLastRescueStep = (ticketId) => call(supabase.rpc('undo_last_rescue_step', { p_ticket_id: ticketId }));
+
 export const confirmResidentLocated = (ticketId, fix) =>
   call(supabase.rpc('confirm_resident_located', {
     p_ticket_id: ticketId, p_lat: fix?.lat ?? null, p_lng: fix?.lng ?? null, p_accuracy: fix?.accuracy ?? null,

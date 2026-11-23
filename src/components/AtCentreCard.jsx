@@ -1,14 +1,14 @@
-// Resident home: who in the household is at an evacuation centre right now, and a
+// Resident home: who in the household is at an evacuation center right now, and a
 // "Check out" button so the household can record leaving without the barangay staff.
-// Also tells the resident once when someone in the household is checked in at a centre
-// (for example by a responder or the centre staff).
+// Also tells the resident once when someone in the household is checked in at a center
+// (for example by a responder or the center staff).
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Modal, Alert, ActivityIndicator, ScrollView } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { checkOutMyHousehold } from '../services/api';
 import { notify } from '../lib/alarm';
 
-const SEEN_KEY = 'pc.atCentre.seen.v1'; // { [personId]: 'centre|status' }
+const SEEN_KEY = 'pc.atCentre.seen.v1'; // { [personId]: 'center|status' }
 const AT_CENTRE = ['safely_evacuated', 'in_transit'];
 const idOf = (p) => p.member_id || p.uid;
 
@@ -32,8 +32,8 @@ export default function AtCentreCard({ people = [], profileUid, activeDisasters 
       AsyncStorage.setItem(`${SEEN_KEY}:${profileUid}`, JSON.stringify(next)).catch(() => {});
       if (!alive || !fresh.length) return;
       const lines = fresh.map((p) => `${p.uid === profileUid ? 'You' : p.name}: ${p.center_name}`).join('\n');
-      Alert.alert('🏫 Checked in at an evacuation centre', `${lines}\n\nWhen you leave, tap "Check out" on your home screen.`);
-      notify({ title: 'Checked in at an evacuation centre', body: lines.replace(/\n/g, ' • '), data: { kind: 'at_centre' } });
+      Alert.alert('🏫 Checked in at an evacuation center', `${lines}\n\nWhen you leave, tap "Check out" on your home screen.`);
+      notify({ title: 'Checked in at an evacuation center', body: lines.replace(/\n/g, ' • '), data: { kind: 'at_centre' } });
     })();
     return () => { alive = false; };
   }, [signature, profileUid]);
@@ -46,11 +46,11 @@ export default function AtCentreCard({ people = [], profileUid, activeDisasters 
   };
 
   const send = async (confirmed = false) => {
-    if (!ticked.length) return Alert.alert('Nobody ticked', 'Tick who left the centre.');
+    if (!ticked.length) return Alert.alert('Nobody ticked', 'Tick who left the center.');
     if (activeDisasters.length && !confirmed) {
       return Alert.alert(
         'The disaster is not over yet ⚠️',
-        `${activeDisasters[0].name || 'A disaster'} is still declared in your barangay. The MDRRMO will announce when it is safe to go home. Leave the centre anyway?`,
+        `${activeDisasters[0].name || 'A disaster'} is still declared in your barangay. The MDRRMO will announce when it is safe to go home. Leave the center anyway?`,
         [
           { text: 'Stay for now', style: 'cancel' },
           { text: 'Yes, we left', style: 'destructive', onPress: () => send(true) },
@@ -63,8 +63,8 @@ export default function AtCentreCard({ people = [], profileUid, activeDisasters 
       await checkOutMyHousehold(all ? null : ticked);
       setOpen(false);
       Alert.alert('Checked out ✅', all
-        ? 'Your barangay can see your household left the centre.'
-        : `${ticked.length} checked out. The others are still listed at the centre.`);
+        ? 'Your barangay can see your household left the center.'
+        : `${ticked.length} checked out. The others are still listed at the center.`);
       onDone?.();
     } catch (e) {
       Alert.alert('Not saved', e.message);
@@ -75,7 +75,7 @@ export default function AtCentreCard({ people = [], profileUid, activeDisasters 
 
   return (
     <View style={[styles.card, style]}>
-      <Text style={styles.kicker}>🏫 AT AN EVACUATION CENTRE</Text>
+      <Text style={styles.kicker}>🏫 AT AN EVACUATION CENTER</Text>
       {here.map((p) => (
         <Text key={idOf(p)} style={styles.line}>
           <Text style={styles.name}>{p.uid === profileUid ? 'You' : p.name}</Text>
@@ -83,13 +83,13 @@ export default function AtCentreCard({ people = [], profileUid, activeDisasters 
         </Text>
       ))}
       <TouchableOpacity style={styles.btn} onPress={start} accessibilityRole="button">
-        <Text style={styles.btnText}>↩ Check out (we left the centre)</Text>
+        <Text style={styles.btnText}>↩ Check out (we left the center)</Text>
       </TouchableOpacity>
 
       <Modal visible={open} transparent animationType="slide" onRequestClose={() => setOpen(false)}>
         <View style={styles.backdrop}>
           <View style={styles.dialog}>
-            <Text style={styles.title}>Who left the centre?</Text>
+            <Text style={styles.title}>Who left the center?</Text>
             <Text style={styles.sub}>Untick anyone who is staying.</Text>
             <ScrollView style={{ flexGrow: 0 }}>
               {here.map((p) => {

@@ -67,12 +67,12 @@ const STEPS = {
     `${m.unit_name || 'A rescue team'} has been assigned to your SOS.`,
     'Stay where you are and keep your phone with you.'] }),
   onTheWay: (m) => ({ title: 'RESCUER ON THE WAY', lines: [
-    'Your rescuer is on the way. Prepare and stay in a safe, easy-to-reach spot.',
+    'Your responder is on the way. Prepare and stay in a safe, easy-to-reach spot.',
     m.unit_name ? `Rescue team: ${m.unit_name}` : null] }),
   arrived: () => ({ title: 'RESCUER ARRIVED', urgent: true, lines: [
-    "Your rescuer has arrived at your location. Please follow the rescuer's instructions."] }),
+    "Your responder has arrived at your location. Please follow the responder's instructions."] }),
   evacuating: (m) => ({ title: 'GOING TO AN EVACUATION CENTER', green: true, lines: [
-    'Your rescuer is taking you to an evacuation center with space. Stay with your rescuer.',
+    'Your responder is taking you to an evacuation center with space. Stay with your responder.',
     centerText(m) ? `Evacuation center: ${centerText(m)}` : null] }),
   evacuated: (m) => ({ title: 'YOU ARE SAFE', green: true, lines: [
     'You have arrived at the evacuation center. Please follow the staff there.',
@@ -80,8 +80,8 @@ const STEPS = {
   closed: () => ({ title: 'SOS CLOSED', green: true, lines: [
     'The rescue team has closed your SOS.',
     'If you still need help, send a new SOS.'] }),
-  cancelled: () => ({ title: 'RESCUE CANCELLED', lines: [
-    'The MDRRMO cancelled this rescue.',
+  cancelled: () => ({ title: 'RESCUE CANCELED', lines: [
+    'The MDRRMO canceled this rescue.',
     'If you still need help, send a new SOS.'] }),
 };
 
@@ -161,8 +161,8 @@ export function RescueWatcher({ enabled = true }) {
 
 const STEP_TEXT = {
   assigned: 'ASSIGNED: a rescue team is assigned to you',
-  onTheWay: 'ON THE WAY: the rescuer is coming to you',
-  arrived: 'ARRIVED: the rescuer is with you',
+  onTheWay: 'ON THE WAY: the responder is coming to you',
+  arrived: 'ARRIVED: the responder is with you',
   evacuating: 'GOING TO AN EVACUATION CENTER',
   evacuated: 'SAFE: you are at the evacuation center',
 };

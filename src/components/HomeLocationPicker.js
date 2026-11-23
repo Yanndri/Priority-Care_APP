@@ -1,4 +1,4 @@
-// "Use My Current Location": reads the phone's GPS, pins it on the map and lets
+// "Pin my house on the map": reads the phone's GPS, pins it on the map and lets
 // the resident tap the map to move the pin when the reading is off. Used by
 // registration and the resident profile. Reuses the app's OfflineMap.
 import React, { useCallback, useEffect, useState } from 'react';
@@ -15,7 +15,7 @@ const ERRORS = {
   no_fix: 'Could not get a GPS reading. Go outdoors or near a window and tap Try GPS again, or tap the map on your house.',
 };
 
-// fallback: { lat, lng } where the map starts when there is no GPS (saved home or barangay centre).
+// fallback: { lat, lng } where the map starts when there is no GPS (saved home or barangay center).
 export default function HomeLocationPicker({ visible, fallback = null, saving = false, onCancel, onConfirm }) {
   const insets = useSafeAreaInsets();
   const [pin, setPin] = useState(null);
@@ -32,7 +32,7 @@ export default function HomeLocationPicker({ visible, fallback = null, saving = 
     setLocating(false);
     if (r.error) {
       setError({ code: r.error, canAskAgain: r.canAskAgain });
-      setFlyTs(Date.now()); // show the fallback pin (saved home or barangay centre)
+      setFlyTs(Date.now()); // show the fallback pin (saved home or barangay center)
       return;
     }
     setFix(r);

@@ -111,7 +111,7 @@ export async function notify({ title, body, data = {}, urgent = false }) {
       if (Platform.OS === 'android') {
         await Notifications.setNotificationChannelAsync(UPDATES_CHANNEL, {
           name: 'Rescue updates',
-          description: 'Rescuer approaching, evacuation center assigned',
+          description: 'Responder on the way, evacuation center assigned',
           importance: Notifications.AndroidImportance.HIGH,
           sound: 'default',
           vibrationPattern: [0, 400, 200, 400],

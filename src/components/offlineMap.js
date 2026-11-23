@@ -843,7 +843,7 @@ export default function OfflineMap({
               return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
             });
           }
-          // Open evacuation centres from the database: { id, name, lat, lng, occupied, capacity }
+          // Open evacuation centers from the database: { id, name, lat, lng, occupied, capacity }
           window.syncShelters = function(list, unitLabel) {
             myUnitLabel = unitLabel || 'My Unit';
             shelterMarkers.forEach(function(m) { map.removeLayer(m); });
@@ -865,9 +865,8 @@ export default function OfflineMap({
             if (res && res.lat && res.lng) {
               selectedResId = res.id;
               renderResidentMarkers(allResidents);
-              // A responder with a location gets a route, which also moves the map; otherwise just fly there.
-              var routing = currentRole === 'rescuer' && Boolean(myCoords);
-              if (currentRole === 'rescuer') window.routeTo('selection', 'r:' + res.id, res.lat, res.lng, res.name || 'the resident', true);
+              // No automatic route: the responder taps "Directions" on the rescue card when they want one.
+              var routing = false;
 
               var homeLat = res.homeLat || res.lat;
               var homeLng = res.homeLng || res.lng;
@@ -927,7 +926,7 @@ export default function OfflineMap({
                 .addTo(map)
                 .bindPopup('<b>' + escapeHtml(p.label || 'Disaster') + '</b>' + (p.note ? '<br>' + escapeHtml(p.note) : ''),
                   { autoPan: false });
-              // Centre on the disaster (no route: it is an area, not a household).
+              // Center on the disaster (no route: it is an area, not a household).
               window.clearRouteSlot('disaster');
               map.flyTo([p.lat, p.lng], 16, { animate: true, duration: 0.8 });
               setTimeout(function() { if (disasterMarker) disasterMarker.openPopup(); }, 900);
@@ -954,16 +953,19 @@ export default function OfflineMap({
             }
             var isNew = missionKey !== t.key;
             if (isNew) {
-              if (missionMarker) map.removeLayer(missionMarker);
+              if (missionMarker) { map.removeLayer(missionMarker); missionMarker = null; }
+              missionKey = t.key;
+            }
+            // Directions to the resident: their pin is already on the map, so no extra marker.
+            if (isNew && t.kind !== 'resident') {
               missionMarker = L.marker([t.lat, t.lng], {
                 icon: L.divIcon({ className: 'gps-dot-wrapper', html: '<div class="mission-pin"><span>H</span></div>', iconSize: [30, 30], iconAnchor: [15, 30] }),
                 zIndexOffset: 1100
               }).addTo(map).bindPopup('<b>🏫 ' + escapeHtml(t.name) + '</b><br>Reserved for this rescue');
-              missionKey = t.key;
             }
             // t.navigate: turn-by-turn and follow the phone; otherwise a route preview.
             if (isNew || !route || route.slot !== 'mission' || Boolean(route.navigate) !== Boolean(t.navigate)) {
-              window.routeTo('mission', 'm:' + t.key, t.lat, t.lng, t.name || 'the evacuation center', isNew || !t.navigate, t.navigate);
+              window.routeTo('mission', 'm:' + t.key, t.lat, t.lng, t.name || (t.kind === 'resident' ? 'the resident' : 'the evacuation center'), isNew || !t.navigate, t.navigate);
             }
           };
 

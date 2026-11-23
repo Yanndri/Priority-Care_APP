@@ -2,15 +2,15 @@
 //   1. Accept & go          (ticket -> en_route; the resident is told "on the way")
 //   2. I'm with them        (resident located -> on_scene; the resident is told "arrived")
 //   3. How did it end?
-//        Take to a centre   -> seats are reserved at the nearest centre with room (searched from
+//        Take to a center   -> seats are reserved at the nearest center with room (searched from
 //                              the RESIDENT's location), the route starts, the resident is told
 //        Resolved here      -> pick a reason; the ticket closes with that reason
-//   4. Arrived at centre    (tick who arrived; they are checked in and the ticket closes)
+//   4. Arrived at center    (tick who arrived; they are checked in and the ticket closes)
 // Seats are reserved by the server in one locked step, so two units never take the same last seats.
 import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator, Modal, TextInput, ScrollView } from 'react-native';
 import {
-  getMissionStatus, getCenterAvailability, confirmResidentLocated, assignEvacuationCenter,
+  getMissionStatus, getCenterAvailability, confirmResidentLocated, undoLastRescueStep, assignEvacuationCenter,
   releaseEvacuationReservation, confirmEvacuationArrival, startEvacuation, onLiveSignal,
   updateTicketStatus, recordEvacuation,
 } from '../services/api';
@@ -21,12 +21,12 @@ const RESOLVED_REASONS = ['Safe, staying home', 'Went to relatives', 'Brought to
 const isNetworkError = (e) => /network|fetch|timeout|offline|failed to fetch/i.test(String(e?.message || e));
 const minutes = (sec) => (sec == null ? '' : `${Math.max(1, Math.round(sec / 60))} min`);
 
-export default function RescueCard({ res, unitPos, compact, onCompact, onTarget, onClosed, onBackup, onInfo }) {
+export default function RescueCard({ res, unitPos, compact, onCompact, onTarget, onClosed, onBackup }) {
   const ticketId = res.ticketId;
   const [mission, setMission] = useState(null);
   const [busy, setBusy] = useState(false);
   const [noCenter, setNoCenter] = useState(null);
-  const [road, setRoad] = useState(null);           // { centerId, road_m, road_s } for the reserved centre
+  const [road, setRoad] = useState(null);           // { centerId, road_m, road_s } for the reserved center
   const [endModal, setEndModal] = useState(false);  // "Resolved here" reasons
   const [other, setOther] = useState('');
   const [arriveModal, setArriveModal] = useState(false);
@@ -49,13 +49,19 @@ export default function RescueCard({ res, unitPos, compact, onCompact, onTarget,
   // The resident's location: where the SOS was sent from.
   const residentSpot = { lat: Number(res.lat), lng: Number(res.lng) };
 
-  // The map shows the route to the reserved centre (turn by turn once the trip started).
+  // Directions only when the responder asks: to the resident before a center is chosen, then to the
+  // reserved center (turn by turn once the trip started). Hidden by default so the map stays calm.
+  const [directions, setDirections] = useState(false);
   useEffect(() => {
+    if (!directions) return onTarget?.(null);
     onTarget?.(reserved ? {
-      key: `${reserved.center_id}`, lat: Number(reserved.latitude), lng: Number(reserved.longitude),
+      key: `c${reserved.center_id}`, lat: Number(reserved.latitude), lng: Number(reserved.longitude),
       name: reserved.center_name, navigate: Boolean(mission?.evacuation_started_at),
-    } : null);
-  }, [reserved?.center_id, reserved?.latitude, reserved?.longitude, mission?.evacuation_started_at]);
+    } : {
+      key: `r${ticketId}`, kind: 'resident', lat: residentSpot.lat, lng: residentSpot.lng, name: res.name, navigate: false,
+    });
+    return undefined;
+  }, [directions, reserved?.center_id, reserved?.latitude, reserved?.longitude, mission?.evacuation_started_at, residentSpot.lat, residentSpot.lng]);
   useEffect(() => () => onTarget?.(null), []);
 
   let step = 1;
@@ -101,7 +107,7 @@ export default function RescueCard({ res, unitPos, compact, onCompact, onTarget,
     ]);
   };
 
-  // ---- 3a: take to a centre (searched from the resident's location, not this phone's GPS) ----
+  // ---- 3a: take to a center (searched from the resident's location, not this phone's GPS) ----
   const takeToCentre = async (exclude = []) => {
     setBusy(true);
     try {
@@ -113,8 +119,8 @@ export default function RescueCard({ res, unitPos, compact, onCompact, onTarget,
         fix: residentSpot, exclude, roadOrder: ranked.centers.map((c) => c.center_id),
       });
       if (!r?.assigned) {
-        if (exclude.length) Alert.alert('No other centre has room', 'You keep the seats you already have.');
-        setNoCenter(r?.reason || 'No centre has room for this household.');
+        if (exclude.length) Alert.alert('No other center has room', 'You keep the seats you already have.');
+        setNoCenter(r?.reason || 'No center has room for this household.');
         await load();
         return;
       }
@@ -123,10 +129,9 @@ export default function RescueCard({ res, unitPos, compact, onCompact, onTarget,
       setRoad(ranked.byRoad && hit?.road_m != null ? { centerId: r.center.center_id, road_m: hit.road_m, road_s: hit.road_s } : null);
       await startEvacuation(ticketId); // the resident is told where they are going
       await load();
-      onCompact?.(true);                // make room for the route
     } catch (e) {
-      Alert.alert('No centre chosen', isNetworkError(e)
-        ? 'No connection. A centre can only be reserved online so its seats are really checked.'
+      Alert.alert('No center chosen', isNetworkError(e)
+        ? 'No connection. A center can only be reserved online so its seats are really checked.'
         : e.message);
     } finally {
       setBusy(false);
@@ -142,7 +147,7 @@ export default function RescueCard({ res, unitPos, compact, onCompact, onTarget,
     closeTicket(`Resolved on site: ${text}`, 'Rescue closed ✅', `Saved: ${text}. The resident was told their request is closed.`);
   };
 
-  // ---- 4: arrived at the centre ----
+  // ---- 4: arrived at the center ----
   const members = res.members || [];
   const openArrive = () => {
     if (!members.length) return confirmArrival(true);
@@ -176,11 +181,11 @@ export default function RescueCard({ res, unitPos, compact, onCompact, onTarget,
   };
 
   const changeCentre = () => {
-    Alert.alert('Change centre?', `Free the seats at ${reserved.center_name} and pick the next nearest centre with room?`, [
+    Alert.alert('Change center?', `Free the seats at ${reserved.center_name} and pick the next nearest center with room?`, [
       { text: 'Keep it', style: 'cancel' },
       {
         text: 'Change',
-        // The server moves the seats in one step, so they are kept if no other centre has room.
+        // The server moves the seats in one step, so they are kept if no other center has room.
         onPress: () => takeToCentre([reserved.center_id]),
       },
     ]);
@@ -189,18 +194,25 @@ export default function RescueCard({ res, unitPos, compact, onCompact, onTarget,
   // ---- undo the last step ----
   const undo = () => {
     if (step === 4) {
-      return Alert.alert('Undo "Take to a centre"?', `The seats at ${reserved.center_name} are freed and you go back to "How did it end?".`, [
+      return Alert.alert('Undo "Take to a center"?', `The seats at ${reserved.center_name} are freed and you go back to "How did it end?".`, [
         { text: 'Keep it', style: 'cancel' },
         {
           text: 'Undo', style: 'destructive',
           onPress: async () => {
-            const ok = await act(() => releaseEvacuationReservation(ticketId, 'Responder undid the centre choice'), 'Not undone');
+            const ok = await act(() => releaseEvacuationReservation(ticketId, 'Responder undid the center choice'), 'Not undone');
             if (ok) { onCompact?.(false); onTarget?.(null); }
           },
         },
       ]);
     }
-    return Alert.alert('Can\'t undo this step', 'Steps only move forward so the record stays true. If you tapped by mistake, tell the MDRRMO.');
+    // Steps 2-3: go one step back. Allowed any time while the rescue is open (a pocket tap may go
+    // unnoticed); the ticket history records the undo, so nobody has to fix the record by hand.
+    const what = step === 3 ? '"I\'m with them"' : '"Accept & go"';
+    const back = step === 3 ? 'On the way' : 'Accept & go';
+    return Alert.alert(`Undo ${what}?`, `Use this if it was tapped by mistake. The rescue goes back to "${back}" and the undo is saved in the history.`, [
+      { text: 'Keep it', style: 'cancel' },
+      { text: 'Undo', style: 'destructive', onPress: () => act(() => undoLastRescueStep(ticketId), 'Not undone') },
+    ]);
   };
 
   // ---- compact: one line while the route shows ----
@@ -214,7 +226,7 @@ export default function RescueCard({ res, unitPos, compact, onCompact, onTarget,
     return (
       <TouchableOpacity style={styles.compact} onPress={() => onCompact?.(false)} activeOpacity={0.85}>
         <Text style={styles.compactText} numberOfLines={1}>Step {step} of 4 • {summary}</Text>
-        <Text style={styles.compactOpen}>▴</Text>
+        <Text style={styles.compactOpen}>▴ Open</Text>
       </TouchableOpacity>
     );
   }
@@ -232,8 +244,8 @@ export default function RescueCard({ res, unitPos, compact, onCompact, onTarget,
     <View style={styles.wrap}>
       <View style={styles.stepRow}>
         <Text style={styles.stepText}>STEP {step} OF 4</Text>
-        <TouchableOpacity onPress={() => onCompact?.(true)} hitSlop={8}>
-          <Text style={styles.link}>▾ Show map</Text>
+        <TouchableOpacity style={styles.smallBtn} onPress={() => onCompact?.(true)}>
+          <Text style={styles.smallBtnText}>🗺️ Show map</Text>
         </TouchableOpacity>
       </View>
 
@@ -251,7 +263,7 @@ export default function RescueCard({ res, unitPos, compact, onCompact, onTarget,
           )}
           <View style={styles.twoRow}>
             <TouchableOpacity style={[styles.half, { backgroundColor: '#1D4ED8' }]} onPress={() => takeToCentre()} disabled={busy}>
-              {busy ? <ActivityIndicator color="#FFF" /> : <Text style={styles.bigText}>🏥 Take to a centre</Text>}
+              {busy ? <ActivityIndicator color="#FFF" /> : <Text style={styles.bigText}>🏥 Take to a center</Text>}
             </TouchableOpacity>
             <TouchableOpacity style={[styles.half, { backgroundColor: '#15803D' }]} onPress={() => setEndModal(true)} disabled={busy}>
               <Text style={styles.bigText}>✅ Resolved here</Text>
@@ -262,7 +274,7 @@ export default function RescueCard({ res, unitPos, compact, onCompact, onTarget,
 
       {step === 4 && (
         <>
-          <View style={styles.centre}>
+          <View style={styles.center}>
             <Text style={styles.centreName}>🏥 {reserved.center_name}{reserved.barangay_name ? `, Brgy. ${reserved.barangay_name}` : ''}</Text>
             <Text style={styles.centreLine}>
               {road?.centerId === reserved.center_id
@@ -270,20 +282,36 @@ export default function RescueCard({ res, unitPos, compact, onCompact, onTarget,
                 : straight != null ? `${formatDistance(straight)} away` : ''}
               {` • ${reserved.headcount} seat${reserved.headcount === 1 ? '' : 's'} kept`}
             </Text>
-            {reserved.center_status !== 'active' && <Text style={styles.warn}>This centre closed. Tap "Change centre".</Text>}
+            {reserved.center_status !== 'active' && <Text style={styles.warn}>This center closed. Tap "Change center".</Text>}
           </View>
-          <Big label="✅ ARRIVED AT CENTRE" color="#16A34A" onPress={openArrive} />
+          <Big label="✅ ARRIVED AT CENTER" color="#16A34A" onPress={openArrive} />
         </>
       )}
 
+      {/* Small actions as real buttons (easy to tap with wet hands or gloves). The household's details
+          open from "Info" at the top of the card. */}
       <View style={styles.links}>
         {step <= 3 && step >= 2 && (
-          <TouchableOpacity onPress={notReal} hitSlop={6}><Text style={[styles.link, { color: '#B91C1C' }]}>Not a real emergency</Text></TouchableOpacity>
+          <TouchableOpacity style={[styles.smallBtn, styles.smallBtnDanger]} onPress={notReal}>
+            <Text style={[styles.smallBtnText, { color: '#B91C1C' }]}>Not a real emergency</Text>
+          </TouchableOpacity>
         )}
-        {step === 4 && <TouchableOpacity onPress={changeCentre} hitSlop={6}><Text style={styles.link}>Change centre</Text></TouchableOpacity>}
-        <TouchableOpacity onPress={onBackup} hitSlop={6}><Text style={styles.link}>+ Backup</Text></TouchableOpacity>
-        <TouchableOpacity onPress={onInfo} hitSlop={6}><Text style={styles.link}>ⓘ Info</Text></TouchableOpacity>
-        {step >= 2 && <TouchableOpacity onPress={undo} hitSlop={6}><Text style={styles.link}>↩ Undo last step</Text></TouchableOpacity>}
+        {step === 4 && (
+          <TouchableOpacity style={styles.smallBtn} onPress={changeCentre}>
+            <Text style={styles.smallBtnText}>Change center</Text>
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity style={[styles.smallBtn, directions && styles.smallBtnOn]} onPress={() => setDirections((d) => !d)}>
+          <Text style={[styles.smallBtnText, directions && { color: '#FFFFFF' }]}>{directions ? 'Hide directions' : '🧭 Directions'}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.smallBtn} onPress={onBackup}>
+          <Text style={styles.smallBtnText}>+ Backup</Text>
+        </TouchableOpacity>
+        {step >= 2 && (
+          <TouchableOpacity style={styles.smallBtn} onPress={undo}>
+            <Text style={styles.smallBtnText}>{step === 4 ? '↩ Pick a different ending' : '↩ Undo last step'}</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Resolved here: why */}
@@ -313,7 +341,7 @@ export default function RescueCard({ res, unitPos, compact, onCompact, onTarget,
         </View>
       </Modal>
 
-      {/* Arrived at centre: who came */}
+      {/* Arrived at center: who came */}
       <Modal visible={arriveModal} transparent animationType="slide" onRequestClose={() => setArriveModal(false)}>
         <View style={styles.backdrop}>
           <View style={[styles.dialog, { maxHeight: '85%' }]}>
@@ -362,12 +390,16 @@ const styles = StyleSheet.create({
   bigText: { color: '#FFFFFF', fontWeight: '900', fontSize: 13, textAlign: 'center' },
   twoRow: { flexDirection: 'row', gap: 8 },
   half: { flex: 1, borderRadius: 8, paddingVertical: 13, paddingHorizontal: 6, alignItems: 'center' },
-  centre: { borderWidth: 1, borderColor: '#BBF7D0', backgroundColor: '#F0FDF4', borderRadius: 8, padding: 8, gap: 2 },
+  center: { borderWidth: 1, borderColor: '#BBF7D0', backgroundColor: '#F0FDF4', borderRadius: 8, padding: 8, gap: 2 },
   centreName: { fontSize: 13, fontWeight: '900', color: '#0F172A' },
   centreLine: { fontSize: 11, color: '#334155' },
-  links: { flexDirection: 'row', flexWrap: 'wrap', gap: 14, paddingTop: 2 },
+  links: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingTop: 4 },
+  smallBtn: { minHeight: 44, paddingHorizontal: 14, borderRadius: 8, borderWidth: 1.5, borderColor: '#BFDBFE', backgroundColor: '#EFF6FF', justifyContent: 'center' },
+  smallBtnOn: { backgroundColor: '#1D4ED8', borderColor: '#1D4ED8' },
+  smallBtnDanger: { borderColor: '#FCA5A5', backgroundColor: '#FFF' },
+  smallBtnText: { fontSize: 14, fontWeight: '800', color: '#1D4ED8' },
   link: { fontSize: 12, fontWeight: '800', color: '#1D4ED8' },
-  compact: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
+  compact: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 48 },
   compactText: { flex: 1, fontSize: 13, fontWeight: '900', color: '#0F172A' },
   compactOpen: { fontSize: 16, fontWeight: '900', color: '#1D4ED8' },
   backdrop: { flex: 1, backgroundColor: 'rgba(15,23,42,0.55)', justifyContent: 'flex-end' },

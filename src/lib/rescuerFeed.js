@@ -2,7 +2,7 @@
 // screens were built around (one entry per SOS / dispatch ticket).
 import { useCallback, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { EMERGENCY_TYPES } from '../constants/mockData';
+import { EMERGENCY_TYPES } from '../constants/options';
 import { getHazardReporters, getUnverifiedResidents, getTicketSosMembers, reporterLabel, getRescuerFeed, listBarangays, memberToApp, personBadge, subscribe, onLiveSignal, MOBILITY_LABELS, AGE_GROUP_LABELS } from '../services/api';
 import { calculateVPI, getVPIPriority, determineRequiredGear } from '../utils/vpi';
 import { toMapHazard, toMapShelter } from './mapData';
@@ -79,8 +79,10 @@ function fromTicket(t, myUnitName) {
     barangay: t.barangay_name,
     // A visitor's registered sitio is in another barangay, so say where they are from instead.
     sitio: t.sos?.visiting_from ? `visiting from Brgy. ${t.sos.visiting_from}` : t.resident?.sitio || '',
+    // The feed only has where the SOS came from, not the home pin, so "at home" is unknown.
     homeLat: lat,
     homeLng: lng,
+    homeKnown: false,
     lat,
     lng,
     reportedAt: timeAgo(t.sos?.created_at || t.created_at),
@@ -90,7 +92,8 @@ function fromTicket(t, myUnitName) {
     vpiScore: Math.max(v.score, level ? level * 30 : 0),
     householdSize: t.sos?.headcount || people.length || 1,
     members: people.map(toPerson),
-    landmark: [t.resident?.landmark, t.location_note].filter(Boolean).join(' • '),
+    // The ticket's location note is often a copy of the home landmark: show the same text only once.
+    landmark: [...new Set([t.resident?.landmark, t.location_note].map((x) => (x || '').trim()).filter(Boolean))].join(' • '),
     housePhotoPath: t.resident?.house_photo_path,
     houseType: t.resident?.household?.house_type,
     floorLevel: t.resident?.household?.floor_level,
@@ -119,8 +122,10 @@ function fromAlert(a, barangayNames) {
     name: a.resident_name,
     barangay: barangayNames[a.barangay_id] || '',
     sitio: a.visiting_from ? `visiting from Brgy. ${a.visiting_from}` : a.sitio || '',
+    // The feed only has where the SOS came from, not the home pin, so "at home" is unknown.
     homeLat: lat,
     homeLng: lng,
+    homeKnown: false,
     lat,
     lng,
     reportedAt: timeAgo(a.created_at),
@@ -226,7 +231,7 @@ export function useRescuerFeed({ pollMs = 20000 } = {}) {
   useEffect(() => {
     reload();
     const unsubscribe = subscribe(['sos_alerts', 'dispatch_tickets', 'hazard_reports', 'evacuation_records'], reload);
-    // Disaster declarations, centres and unit changes come from the web console.
+    // Disaster declarations, centers and unit changes come from the web console.
     const unsignal = onLiveSignal(['events', 'centers', 'units', 'missing', 'preemptive'], reload);
     const timer = setInterval(reload, pollMs);
     return () => { unsubscribe(); unsignal(); clearInterval(timer); };

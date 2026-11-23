@@ -9,7 +9,7 @@ import DisastersPanel from '../../components/DisastersPanel';
 import { useActiveDisasters } from '../../components/DisasterBanner';
 import { useSession } from '../../components/SessionProvider';
 import { FONT_SIZES, FONT_WEIGHTS } from '../../constants/typography';
-import { HAZARD_OPTIONS } from '../../constants/mockData';
+import { HAZARD_OPTIONS } from '../../constants/options';
 import { confirmHazard, getMyHazardReports, getNearbyHazards, getPublicMap, subscribe, unconfirmHazard, withdrawMyHazard } from '../../services/api';
 import { distanceMeters, formatDistance } from '../../lib/location';
 import { getDemoSpot, getSharedLocation } from '../../lib/sharedLocation';

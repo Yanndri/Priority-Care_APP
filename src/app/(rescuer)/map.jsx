@@ -6,9 +6,9 @@ import OfflineMap from '../../components/offlineMap';
 import { isInCordova, OUTSIDE_CORDOVA_MESSAGE } from '../../lib/cordovaArea';
 import BottomNav from '../../components/BottomNav';
 import { COLORS } from '../../constants/colors';
-import { HAZARD_OPTIONS, RESCUER_DEFAULT_COORDS } from '../../constants/mockData';
+import { HAZARD_OPTIONS, RESCUER_DEFAULT_COORDS } from '../../constants/options';
 import { useRescuerFeed } from '../../lib/rescuerFeed';
-import { getCurrentCoords } from '../../lib/location';
+import { formatDistance, getCurrentCoords } from '../../lib/location';
 import { useTracker } from '../../lib/rescueTracker';
 import RescueCard from '../../components/RescueCard';
 import SosDetails from '../../components/SosDetails';
@@ -401,7 +401,7 @@ export default function RescuerMapScreen() {
   const handleInitiatePreEmptiveEvac = (res) => {
     Alert.alert(
       'Evacuate early 🚶',
-      `Bring ${res.name}'s household (priority score ${res.vpiScore}) to their evacuation centre?`,
+      `Bring ${res.name}'s household (priority score ${res.vpiScore}) to their evacuation center?`,
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Start', onPress: () => openCheckIn(res) },
@@ -437,7 +437,7 @@ export default function RescuerMapScreen() {
           text: 'Cancel request', style: 'destructive',
           onPress: async () => {
             try { await cancelBackupRequest(request.request_id); await loadBackups(); }
-            catch (e) { Alert.alert('Not cancelled', e.message); }
+            catch (e) { Alert.alert('Not canceled', e.message); }
           },
         },
       ]
@@ -447,7 +447,7 @@ export default function RescuerMapScreen() {
   const handleConfirmShelterCheckIn = async () => {
     if (!selectedResident) return;
     const center = feed.centers.find((c) => c.id === checkInCenterId);
-    if (!center) return Alert.alert('Choose a shelter', 'Pick the evacuation centre the household was brought to.');
+    if (!center) return Alert.alert('Choose an evacuation center', 'Pick the evacuation center the household was brought to.');
     const res = selectedResident;
     const members = res.members || [];
     const admitted = members.filter((m) => checkedMemberIds.includes(m.id)).length;
@@ -542,9 +542,9 @@ export default function RescuerMapScreen() {
             setForceOfflineSim(nextOffline);
             setIsOffline(nextOffline);
             Alert.alert(
-              nextOffline ? 'Demo: offline view 📡' : 'Back online 🌐',
+              nextOffline ? 'Offline view 📡' : 'Back online 🌐',
               nextOffline
-                ? 'Showing the saved offline map and the last downloaded SOS, resident and hazard data. Tap again to go back online.'
+                ? 'This is what the map shows with no signal: the saved offline map and the last downloaded SOS, resident and hazard data. Tap the bar again to go back online.'
                 : 'Showing live data again.'
             );
           }}
@@ -552,8 +552,10 @@ export default function RescuerMapScreen() {
         >
           <View style={[styles.statusDot, { backgroundColor: isOffline ? '#DC2626' : '#16A34A' }]} />
           <Text style={styles.statusText}>
-            {isOffline
-              ? 'OFFLINE • LAST KNOWN DATA'
+            {isOffline && forceOfflineSim
+              ? 'OFFLINE VIEW • SAVED DATA • TAP TO GO BACK'
+              : isOffline
+              ? 'NO SIGNAL • SAVED DATA'
               : feed.error && feed.fromCache
               ? `NO SIGNAL • SAVED DATA FROM ${lastSynced}`
               : feed.error
@@ -831,7 +833,7 @@ export default function RescuerMapScreen() {
                     <Text style={styles.badgeNormalText}>VPI {selectedResident.vpiScore || 50}</Text>
                   </View>
                 )}
-                <Text style={styles.timeTag}>📍 {rescuerGpsCoords ? `${selectedDistFromRescuer}m away` : 'waiting for GPS'}</Text>
+                <Text style={styles.timeTag}>📍 {rescuerGpsCoords ? `${formatDistance(Math.round(selectedDistFromRescuer))} away (straight line)` : 'waiting for GPS'}</Text>
               </View>
             </View>
 
@@ -874,9 +876,14 @@ export default function RescuerMapScreen() {
               <Text style={styles.addressText}>
                 Brgy. {selectedResident.barangay} • {selectedResident.sitio}
               </Text>
-              {selectedDistFromHome > 35 ? (
+              {selectedResident.lat != null && selectedResident.lng != null && !isInCordova(Number(selectedResident.lat), Number(selectedResident.lng)) && (
                 <Text style={styles.displacedNoticeText}>
-                  🏃 Away from home ({selectedDistFromHome}m)
+                  ⚠️ Outside Cordova: the MDRRMO coordinates with that town
+                </Text>
+              )}
+              {selectedResident.homeKnown === false ? null : selectedDistFromHome > 35 ? (
+                <Text style={styles.displacedNoticeText}>
+                  🏃 Away from home ({formatDistance(Math.round(selectedDistFromHome))})
                 </Text>
               ) : (
                 <Text style={styles.atHomeNoticeText}>
@@ -950,7 +957,7 @@ export default function RescuerMapScreen() {
                 {selectedResident.sosCancelled && !sheetMin && (
                   <View style={[styles.evacuatedBanner, { backgroundColor: '#FEF3C7', marginBottom: 6 }]}>
                     <Text style={{ color: '#B45309', fontWeight: '900', fontSize: 10.5 }}>
-                      ⚠️ RESIDENT CANCELLED THE SOS ({String(selectedResident.cancelReason || '').replace('_', ' ').toUpperCase()}) • CHECK ON SITE, THEN CLOSE
+                      ⚠️ RESIDENT CANCELED THE SOS ({String(selectedResident.cancelReason || '').replace('_', ' ').toUpperCase()}) • CHECK ON SITE, THEN CLOSE
                     </Text>
                   </View>
                 )}
@@ -963,7 +970,6 @@ export default function RescuerMapScreen() {
                     onCompact={setSheetMin}
                     onTarget={setMissionTarget}
                     onBackup={() => setSupportModalVisible(true)}
-                    onInfo={() => setDossierModalVisible(true)}
                     onClosed={() => {
                       setMissionTarget(null);
                       feed.reload();
@@ -1237,8 +1243,8 @@ export default function RescuerMapScreen() {
       <Modal visible={checkInModalVisible} transparent animationType="slide">
         <View style={styles.modalBackdrop}>
           <View style={styles.dialog}>
-            <Text style={[styles.dialogTitle, { color: '#1E3A8A' }]}>🏥 CHECK IN AT CENTRE</Text>
-            <Text style={styles.checkInSub}>Centre the household was brought to:</Text>
+            <Text style={[styles.dialogTitle, { color: '#1E3A8A' }]}>🏥 CHECK IN AT CENTER</Text>
+            <Text style={styles.checkInSub}>Center the household was brought to:</Text>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
               {feed.centers.map((c) => (
                 <TouchableOpacity

@@ -86,8 +86,8 @@ export default function ForgotPinScreen() {
         <View style={styles.card}>
           {step === 'number' ? (
             <>
-              <Text style={styles.label}>REGISTERED CONTACT NUMBER</Text>
-              {input({ placeholder: 'e.g., 0917-123-4567', keyboardType: 'phone-pad', autoCorrect: false, autoCapitalize: 'none', value: contact, onChangeText: (v) => { setContact(v); setError(''); }, maxLength: 16 })}
+              <Text style={styles.label}>Mobile number</Text>
+              {input({ placeholder: 'e.g. 0917 123 4567 or +63 917 123 4567', autoComplete: 'tel', keyboardType: 'phone-pad', autoCorrect: false, autoCapitalize: 'none', value: contact, onChangeText: (v) => { setContact(v); setError(''); }, maxLength: 16 })}
               {!!error && <Text style={styles.error}>{error}</Text>}
               <TouchableOpacity style={[styles.primary, (busy || wait > 0) && styles.disabled]} onPress={sendCode} disabled={busy || wait > 0}>
                 {busy ? <ActivityIndicator color="#FFF" /> : <Text style={styles.primaryText}>{wait > 0 ? `Send code (${wait}s)` : 'Send code'}</Text>}
@@ -101,11 +101,11 @@ export default function ForgotPinScreen() {
                   <Text style={styles.smsText}>{sms}</Text>
                 </View>
               )}
-              <Text style={styles.label}>6-DIGIT CODE</Text>
+              <Text style={styles.label}>6-digit code</Text>
               {input({ placeholder: '••••••', keyboardType: 'number-pad', maxLength: 6, value: code, onChangeText: (v) => { setCode(v.replace(/\D/g, '')); setError(''); }, textContentType: 'oneTimeCode', autoComplete: 'sms-otp' })}
-              <Text style={styles.label}>NEW 6-DIGIT PIN</Text>
+              <Text style={styles.label}>New 6-digit PIN</Text>
               {input({ placeholder: '••••••', keyboardType: 'number-pad', maxLength: 6, secureTextEntry: true, value: pin, onChangeText: (v) => { setPin(v); setError(''); } })}
-              <Text style={styles.label}>NEW PIN AGAIN</Text>
+              <Text style={styles.label}>Repeat new PIN</Text>
               {input({ placeholder: '••••••', keyboardType: 'number-pad', maxLength: 6, secureTextEntry: true, value: pin2, onChangeText: (v) => { setPin2(v); setError(''); } })}
               {!!error && <Text style={styles.error}>{error}</Text>}
               <TouchableOpacity style={[styles.primary, busy && styles.disabled]} onPress={savePin} disabled={busy}>
@@ -139,7 +139,7 @@ const styles = StyleSheet.create({
   title: { fontSize: 22, fontWeight: '900', color: '#0F172A' },
   sub: { fontSize: 13, color: '#475569', marginTop: 6, marginBottom: 16, lineHeight: 19 },
   card: { backgroundColor: '#FFF', borderRadius: 16, padding: 18, borderWidth: 1, borderColor: '#E2E8F0', elevation: 4 },
-  label: { fontSize: 10, fontWeight: '800', color: '#64748B', marginBottom: 6 },
+  label: { fontSize: 12, fontWeight: '800', color: '#334155', marginBottom: 6 },
   input: { backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#CBD5E1', borderRadius: 8, padding: 11, fontSize: 13, marginBottom: 14, color: '#0F172A', fontWeight: '600' },
   error: { color: '#B91C1C', fontSize: 12, fontWeight: '700', marginBottom: 8 },
   primary: { backgroundColor: '#DC2626', paddingVertical: 13, borderRadius: 8, alignItems: 'center', marginTop: 4 },

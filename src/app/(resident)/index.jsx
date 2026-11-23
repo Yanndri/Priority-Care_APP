@@ -4,7 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import BottomNav from '../../components/BottomNav';
 import { useSession } from '../../components/SessionProvider';
-import { EMERGENCY_TYPES } from '../../constants/mockData';
+import { EMERGENCY_TYPES } from '../../constants/options';
 import { FONT_SIZES, FONT_WEIGHTS } from '../../constants/typography';
 import {
   getMySos, raiseSos, cancelSos, getHouseholdStatus, setMemberMissing, getPublicMap, subscribe, onLiveSignal,
@@ -14,6 +14,7 @@ import DisasterBanner from '../../components/DisasterBanner';
 import AtCentreCard from '../../components/AtCentreCard';
 import { useMyRescue, RescueStatusCard } from '../../components/RescueWatcher';
 import { getCurrentCoords, distanceMeters, formatDistance, shelterLoad } from '../../lib/location';
+import { isInCordova } from '../../lib/cordovaArea';
 
 const clock = (iso) => {
   if (!iso) return '';
@@ -80,7 +81,7 @@ export default function ResidentDashboard() {
       setCenters(map?.centers || []);
       // Only declarations for the resident's own barangay.
       setEvents((map?.events || []).filter((e) => e.barangay_id === profile?.resident?.barangay_id));
-      // Barangay shelter plan and the last pre-emptive report; optional, so a failure here is not "offline".
+      // The last pre-emptive report; optional, so a failure here is not "offline".
       getMyPreemptive().then(setPlan).catch(() => {});
       setIsOffline(false);
       setLoaded(true);
@@ -104,7 +105,7 @@ export default function ResidentDashboard() {
     // Live changes where row access allows it, plus a periodic refresh for the rest
     // (ticket and shelter updates the resident cannot subscribe to directly).
     const unsubscribe = subscribe(['sos_alerts', 'evacuation_records', 'hazard_reports'], load);
-    // Changes made from the web console (declarations, centres, shelter plan, tickets, missing reports).
+    // Changes made from the web console (declarations, centers, tickets, missing reports).
     const unsignal = onLiveSignal(['events', 'centers', 'shelter_plans', 'tickets', 'missing', 'preemptive'], load);
     const timer = setInterval(load, 20000);
     return () => { unsubscribe(); unsignal(); clearInterval(timer); };
@@ -133,6 +134,10 @@ export default function ResidentDashboard() {
       setSosNote('');
       setSosChips([]);
       if (!coords) Alert.alert('SOS sent', 'Location was not available, so your registered home location was sent instead.');
+      else if (!isInCordova(coords.lat, coords.lng)) {
+        Alert.alert('You are outside Cordova',
+          'Your SOS was sent to your barangay in Cordova. They will contact the MDRRMO of the town where you are. If it is life-threatening, also call 911.');
+      }
     } catch (e) {
       Alert.alert('SOS not sent', `${e.message}\n\nIf you cannot get through, call the MDRRMO hotline.`);
     } finally {
@@ -145,7 +150,7 @@ export default function ResidentDashboard() {
     setBusy(true);
     try {
       setSos(await cancelSos(reason));
-      Alert.alert('SOS cancelled ✅', 'The responders were told your household no longer needs rescue.');
+      Alert.alert('SOS canceled ✅', 'The responders were told your household no longer needs rescue.');
     } catch (e) {
       Alert.alert('Could not cancel', e.message);
     } finally {
@@ -173,15 +178,13 @@ export default function ResidentDashboard() {
     ]);
   };
 
-  // Shelter suggestion: nearest open centre to home, or to where the resident is now when away.
+  // Shelter suggestion: nearest open center to home, or to where the resident is now when away.
   const withDistance = (from) => centers
     .map((c) => ({ ...c, distance: distanceMeters(from, { lat: Number(c.latitude), lng: Number(c.longitude) }) }))
     .filter((c) => shelterLoad(c).label !== 'FULL')
     .sort((a, b) => (a.distance ?? 1e12) - (b.distance ?? 1e12));
-  // The barangay's designated shelter (shelter plan) comes first while it has room.
-  const designatedId = plan?.centers?.find((c) => c.is_primary)?.center_id;
-  const designated = withDistance(homeCoords).find((c) => c.center_id === designatedId);
-  const homeShelter = designated || withDistance(homeCoords)[0];
+  // One rule everywhere: the nearest open center that still has room.
+  const homeShelter = withDistance(homeCoords)[0];
   const nearestShelter = withDistance(currentGps || homeCoords)[0];
   const suggested = isDisplaced ? nearestShelter : homeShelter;
   const sortedCenters = centers
@@ -214,7 +217,7 @@ export default function ResidentDashboard() {
       {/* Active disaster declarations for the resident's barangay (live from the web console) */}
       <DisasterBanner compact events={events} style={{ marginHorizontal: 14, marginTop: 8 }} />
 
-      {/* Who in the household is at an evacuation centre, with Check out */}
+      {/* Who in the household is at an evacuation center, with Check out */}
       <AtCentreCard people={people} profileUid={profile?.uid} activeDisasters={events} onDone={load}
         style={{ marginHorizontal: 14, marginTop: 8 }} />
 
@@ -238,7 +241,7 @@ export default function ResidentDashboard() {
             </View>
             <View style={styles.vDivider} />
             <View style={styles.summaryCol}>
-              <Text style={styles.label}>{isDisplaced ? 'NEAREST SHELTER' : designated ? 'YOUR SHELTER' : 'SHELTER NEAR HOME'}</Text>
+              <Text style={styles.label}>{isDisplaced ? 'NEAREST SHELTER' : 'NEAREST SHELTER TO HOME'}</Text>
               <Text style={[styles.val, { color: '#1E3A8A' }]} numberOfLines={1}>
                 {suggested ? suggested.center_name : 'None open'}
               </Text>
@@ -257,7 +260,7 @@ export default function ResidentDashboard() {
               🏃 Tell your barangay where you are
             </Text>
             <Text style={[styles.evacReportSub, events.length > 0 && { color: '#DBEAFE' }]}>
-              {plan?.latest ? `Last report: ${plan.latest.status.replace(/_/g, ' ')}` : 'Staying home, leaving, or arrived at a shelter'}
+              {plan?.latest ? `Last report: ${plan.latest.status.replace(/_/g, ' ')}` : 'Staying home, leaving, or arrived at an evacuation center'}
             </Text>
           </TouchableOpacity>
 
@@ -319,7 +322,7 @@ export default function ResidentDashboard() {
                   {sos.ticket ? `✓ 2. ${sos.ticket.unit_name || 'Rescue team'} assigned (${sos.ticket.status.replace('_', ' ')})` : '● 2. Waiting for a rescue team to be assigned'}
                 </Text>
                 <Text style={sos.app_status === 'EVACUATED' ? styles.stepDone : styles.stepPending}>
-                  {sos.app_status === 'EVACUATED' ? `✓ 3. Admitted to ${sos.shelter}` : '○ 3. Admitted to an evacuation centre'}
+                  {sos.app_status === 'EVACUATED' ? `✓ 3. Admitted to ${sos.shelter}` : '○ 3. Admitted to an evacuation center'}
                 </Text>
               </View>
 
@@ -328,11 +331,11 @@ export default function ResidentDashboard() {
 
               <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
                 <TouchableOpacity style={styles.btnPrimary} onPress={() => router.push('/(resident)/evac-map')}>
-                  <Text style={styles.btnPrimaryText}>🗺️ View Map</Text>
+                  <Text style={styles.btnPrimaryText}>🗺️ Map</Text>
                 </TouchableOpacity>
                 {/* Cancel SOS button */}
                 <TouchableOpacity style={styles.btnCancelDistress} onPress={() => setCancelModalVisible(true)} disabled={busy}>
-                  <Text style={styles.btnCancelDistressText}>✕ Cancel SOS / We left on our own</Text>
+                  <Text style={styles.btnCancelDistressText}>✕ Cancel SOS</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -347,11 +350,11 @@ export default function ResidentDashboard() {
         >
           <View style={[styles.card, { backgroundColor: isDisplaced ? '#FFFBEB' : '#EFF6FF', borderColor: isDisplaced ? '#FDE68A' : '#BFDBFE' }]}>
             <Text style={[styles.label, { color: isDisplaced ? '#B45309' : '#1E3A8A' }]}>
-              {isDisplaced ? '🏃 YOU ARE AWAY FROM HOME' : designated ? "★ YOUR BARANGAY'S SHELTER" : '🏠 NEAREST OPEN SHELTER TO YOUR HOME'}
+              {isDisplaced ? '🏃 YOU ARE AWAY FROM HOME' : '🏠 NEAREST OPEN SHELTER TO YOUR HOME'}
             </Text>
             <Text style={[styles.val, { fontSize: 13 }]}>
               {!suggested
-                ? 'No evacuation centre is open right now.'
+                ? 'No evacuation center is open right now.'
                 : isDisplaced
                   ? `You are ${formatDistance(distFromHome)} from home. The nearest shelter is ${suggested.center_name}`
                   : `${suggested.center_name} (${formatDistance(suggested.distance)})`}
@@ -391,7 +394,7 @@ export default function ResidentDashboard() {
           </View>
 
           <Text style={[styles.sectionHeader, { marginTop: 12 }]}>LIVE SHELTER CAPACITY</Text>
-          {sortedCenters.length === 0 && <Text style={styles.sub}>No evacuation centre is open right now.</Text>}
+          {sortedCenters.length === 0 && <Text style={styles.sub}>No evacuation center is open right now.</Text>}
           {sortedCenters.map((s) => {
             const occ = shelterLoad(s);
             return (
@@ -482,7 +485,7 @@ export default function ResidentDashboard() {
           <View style={styles.dialog}>
             <Text style={styles.dialogTitle}>CANCEL YOUR SOS?</Text>
             <Text style={styles.dialogSub}>
-              Why are you cancelling?
+              Why are you canceling?
             </Text>
 
             <View style={{ gap: 8, marginVertical: 12 }}>
@@ -579,10 +582,10 @@ const styles = StyleSheet.create({
   stepDone: { fontSize: FONT_SIZES.caption, fontWeight: FONT_WEIGHTS.bold, color: '#16A34A' },
   stepActive: { fontSize: FONT_SIZES.caption, fontWeight: FONT_WEIGHTS.bold, color: '#D97706' },
   stepPending: { fontSize: FONT_SIZES.caption, fontWeight: FONT_WEIGHTS.medium, color: '#94A3B8' },
-  btnPrimary: { flex: 1, backgroundColor: '#1E3A8A', paddingVertical: 10, borderRadius: 6, alignItems: 'center' },
-  btnPrimaryText: { color: '#FFF', fontSize: FONT_SIZES.caption, fontWeight: FONT_WEIGHTS.extraBold },
-  btnCancelDistress: { flex: 1, backgroundColor: '#FFF', borderWidth: 1.5, borderColor: '#DC2626', paddingVertical: 10, borderRadius: 6, alignItems: 'center' },
-  btnCancelDistressText: { color: '#DC2626', fontSize: FONT_SIZES.caption, fontWeight: FONT_WEIGHTS.black },
+  btnPrimary: { flex: 1, minHeight: 48, backgroundColor: '#1E3A8A', borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  btnPrimaryText: { color: '#FFF', fontSize: FONT_SIZES.caption, fontWeight: FONT_WEIGHTS.extraBold, textAlign: 'center' },
+  btnCancelDistress: { flex: 1, minHeight: 48, backgroundColor: '#FFF', borderWidth: 1.5, borderColor: '#DC2626', borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  btnCancelDistressText: { color: '#DC2626', fontSize: FONT_SIZES.caption, fontWeight: FONT_WEIGHTS.black, textAlign: 'center' },
   sectionHeader: { fontSize: FONT_SIZES.body, fontWeight: FONT_WEIGHTS.black, color: '#0F172A', marginBottom: 8 },
   searchInput: { backgroundColor: '#FFF', borderWidth: 1, borderColor: '#CBD5E1', borderRadius: 8, padding: 8, fontSize: FONT_SIZES.body, marginBottom: 8 },
   searchRow: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#EFF6FF', padding: 8, borderRadius: 6, marginBottom: 6 },

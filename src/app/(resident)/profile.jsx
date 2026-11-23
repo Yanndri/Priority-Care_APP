@@ -5,12 +5,11 @@ import { useRouter, useNavigation } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import BottomNav from '../../components/BottomNav';
 import { useSession } from '../../components/SessionProvider';
-import { RESIDENT_CATEGORIES, RESIDENT_MOBILITIES } from '../../constants/mockData';
+import { RESIDENT_CATEGORIES, RESIDENT_MOBILITIES } from '../../constants/options';
 import { FONT_SIZES, FONT_WEIGHTS } from '../../constants/typography';
 import {
-  listBarangays, memberToApp, memberToDb, setMyHousePhoto, signedPhotoUrl, signOut, updateMyHousehold,
+  listSitios, memberToApp, memberToDb, setMyHousePhoto, signedPhotoUrl, signOut, updateMyHousehold,
 } from '../../services/api';
-import { getCurrentCoords } from '../../lib/location';
 import HomeLocationPicker from '../../components/HomeLocationPicker';
 import ChangePasscode from '../../components/ChangePasscode';
 
@@ -44,9 +43,19 @@ export default function ResidentProfileScreen() {
   const [facadeAsset, setFacadeAsset] = useState(null);
   const [draft, setDraft] = useState(null);
   const [showPreview, setShowPreview] = useState(false);
+  // True when the household has a saved photo but it could not be loaded (file gone, or no connection).
+  const [photoMissing, setPhotoMissing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [savingPin, setSavingPin] = useState(false);
+  // The barangay's official sitio list; the sitio is picked from it, never typed.
+  const [sitios, setSitios] = useState(null); // null = loading
+  const [sitioPickerOpen, setSitioPickerOpen] = useState(false);
+  const barangayId = profile?.resident?.barangay_id;
+  useEffect(() => {
+    if (!barangayId) return;
+    listSitios(barangayId).then(setSitios).catch(() => setSitios([]));
+  }, [barangayId]);
 
   // Reload the form when the profile changes (after saving or signing in).
   useEffect(() => {
@@ -54,6 +63,7 @@ export default function ResidentProfileScreen() {
     signedPhotoUrl('house-facades', profile?.resident?.house_photo_path).then((url) => {
       if (!alive) return;
       const next = { ...initial, facadeUri: url };
+      setPhotoMissing(Boolean(profile?.resident?.house_photo_path) && !url);
       setForm(next);
       setSaved(next);
       setFacadeAsset(null);
@@ -89,40 +99,7 @@ export default function ResidentProfileScreen() {
     return unsubscribe;
   }, [navigation, isModified, form]);
 
-  const handleRecalibrateLocation = () => {
-    Alert.alert(
-      'Update home location 📍',
-      'Where should we get it from?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Use Barangay Centre',
-          onPress: async () => {
-            try {
-              const list = await listBarangays();
-              const b = list.find((x) => x.barangay_id === profile?.resident?.barangay_id);
-              if (!b?.center_lat) throw new Error('This barangay has no centre point yet.');
-              setForm((p) => ({ ...p, homeLat: Number(b.center_lat), homeLng: Number(b.center_lng) }));
-              Alert.alert('Location updated', `Set to the centre of Brgy. ${b.barangay_name}.`);
-            } catch (e) {
-              Alert.alert('Not updated', e.message);
-            }
-          },
-        },
-        {
-          text: 'Use my phone GPS',
-          onPress: async () => {
-            const fix = await getCurrentCoords({ precise: true, timeoutMs: 20000 });
-            if (!fix) return Alert.alert('No GPS fix', 'Allow location access and try again outdoors or near a window.');
-            setForm((p) => ({ ...p, homeLat: fix.lat, homeLng: fix.lng }));
-            Alert.alert('Location saved 📍', `Set to:\nLat: ${fix.lat.toFixed(5)}, Lng: ${fix.lng.toFixed(5)}`);
-          },
-        },
-      ]
-    );
-  };
-
-  // "Use My Current Location": the pin is saved to the database straight away.
+  // "Pin my house on the map": the pin is saved to the database straight away.
   const handleSavePin = async (p) => {
     if (!isHead) {
       setPickerOpen(false);
@@ -244,10 +221,13 @@ export default function ResidentProfileScreen() {
           </View>
           <Text style={styles.headerSub}>Brgy. {form.barangay}{form.sitio ? ` • ${form.sitio}` : ''}</Text>
         </View>
-        <ChangePasscode isResident />
-        <TouchableOpacity style={styles.btnLogout} onPress={handleLogout} activeOpacity={0.75}>
-          <Text style={styles.btnLogoutText}>Log Out</Text>
-        </TouchableOpacity>
+        {/* Account buttons on their own row so they never run off the screen. */}
+        <View style={styles.headerActions}>
+          <ChangePasscode isResident style={styles.headerActionBtn} />
+          <TouchableOpacity style={[styles.btnLogout, styles.headerActionBtn]} onPress={handleLogout} activeOpacity={0.75}>
+            <Text style={styles.btnLogoutText}>Log Out</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
@@ -274,8 +254,14 @@ export default function ResidentProfileScreen() {
               <TextInput style={[styles.input, styles.inputLocked]} value={form.barangay} editable={false} />
             </View>
             <View style={styles.col}>
-              <Text style={styles.fieldLabel}>SITIO / ZONE</Text>
-              <TextInput style={styles.input} value={form.sitio} onChangeText={(v) => setField('sitio', v)} />
+              <Text style={styles.fieldLabel}>SITIO</Text>
+              {sitios && sitios.length === 0 ? (
+                <TextInput style={[styles.input, styles.inputLocked]} value={form.sitio || 'No list yet'} editable={false} />
+              ) : (
+                <TouchableOpacity style={[styles.input, styles.sitioSelect]} onPress={() => setSitioPickerOpen(true)} disabled={!sitios}>
+                  <Text style={[styles.sitioSelectText, !form.sitio && { color: '#B45309' }]} numberOfLines={1}>{form.sitio || 'Choose ▼'}</Text>
+                </TouchableOpacity>
+              )}
             </View>
           </View>
 
@@ -284,16 +270,13 @@ export default function ResidentProfileScreen() {
           <View style={styles.geoBox}>
             <View style={styles.col}>
               <Text style={styles.geoVal}>
-                📍 {form.homeLat ? `${form.homeLat.toFixed(5)}, ${form.homeLng.toFixed(5)}` : 'Not set'}
+                📍 {form.homeLat ? `${form.homeLat.toFixed(5)}, ${form.homeLng.toFixed(5)}` : 'Not pinned yet'}
               </Text>
-              <Text style={styles.geoSub}>Update it if the pin is wrong or you moved.</Text>
+              <Text style={styles.geoSub}>The map starts at your phone's location. Tap the map to move the pin onto your house.</Text>
             </View>
-            <TouchableOpacity style={styles.btnCalibrate} onPress={handleRecalibrateLocation}>
-              <Text style={styles.btnCalibrateText}>🔄 Update</Text>
-            </TouchableOpacity>
           </View>
           <TouchableOpacity style={styles.btnUseLocation} onPress={() => setPickerOpen(true)}>
-            <Text style={styles.btnUseLocationText}>📍 Use My Current Location</Text>
+            <Text style={styles.btnUseLocationText}>{form.homeLat ? '📍 Move my house pin' : '📍 Pin my house on the map'}</Text>
           </TouchableOpacity>
 
           {/* Landmark */}
@@ -308,16 +291,28 @@ export default function ResidentProfileScreen() {
           {/* Facade Strip with Tap-To-View */}
           <Text style={[styles.fieldLabel, { marginTop: 6 }]}>PHOTO OF YOUR HOUSE</Text>
           <View style={styles.facadeBox}>
-            <TouchableOpacity onPress={() => form.facadeUri && setShowPreview(true)} activeOpacity={0.8}>
-              {form.facadeUri
-                ? <Image source={{ uri: form.facadeUri }} style={styles.facadeImg} />
-                : <View style={[styles.facadeImg, { alignItems: 'center', justifyContent: 'center', backgroundColor: '#F1F5F9' }]}><Text>🏠</Text></View>}
-              <View style={styles.zoomPill}><Text style={styles.zoomText}>🔍 View</Text></View>
-            </TouchableOpacity>
+            {/* "View" only appears when there is a photo to show. */}
+            {form.facadeUri ? (
+              <TouchableOpacity onPress={() => setShowPreview(true)} activeOpacity={0.8} accessibilityRole="button" accessibilityLabel="View house photo">
+                <Image source={{ uri: form.facadeUri }} style={styles.facadeImg} />
+                <View style={styles.zoomPill}><Text style={styles.zoomText}>🔍 View</Text></View>
+              </TouchableOpacity>
+            ) : (
+              <View style={[styles.facadeImg, { alignItems: 'center', justifyContent: 'center', backgroundColor: '#F1F5F9' }]}>
+                <Text>🏠</Text>
+                <Text style={{ fontSize: FONT_SIZES.tiny, color: '#94A3B8', fontWeight: FONT_WEIGHTS.bold }}>No photo</Text>
+              </View>
+            )}
 
             <View style={styles.col}>
               <Text style={styles.facadeTitle}>Helps responders find your house</Text>
-              <Text style={styles.facadeDesc}>Tap photo to preview in full screen.</Text>
+              <Text style={[styles.facadeDesc, photoMissing && !form.facadeUri && { color: '#B45309' }]}>
+                {form.facadeUri
+                  ? 'Tap the photo to see it full screen.'
+                  : photoMissing
+                    ? 'Your saved photo could not be loaded. Check your connection, or take a new one.'
+                    : 'No photo yet. Take one from the street so responders know your house.'}
+              </Text>
               <View style={styles.row}>
                 <TouchableOpacity style={styles.btnMedia} onPress={handleCamera}>
                   <Text style={styles.btnMediaText}>📷 Take Photo</Text>
@@ -380,7 +375,24 @@ export default function ResidentProfileScreen() {
         onConfirm={handleSavePin}
       />
 
-      <Modal visible={showPreview} transparent animationType="fade">
+      {/* Sitio list of the resident's barangay */}
+      <Modal visible={sitioPickerOpen} transparent animationType="fade" onRequestClose={() => setSitioPickerOpen(false)}>
+        <TouchableOpacity style={styles.modalBg} activeOpacity={1} onPress={() => setSitioPickerOpen(false)}>
+          <View style={styles.dialog}>
+            <Text style={styles.dialogTitle}>Choose your sitio</Text>
+            <ScrollView style={{ maxHeight: 400, marginTop: 6 }}>
+              {[...(sitios || []).map((s) => s.sitio_name), ''].map((name) => (
+                <TouchableOpacity key={name || 'none'} style={styles.sitioOption} onPress={() => { setField('sitio', name); setSitioPickerOpen(false); }}>
+                  <Text style={styles.sitioOptionText}>{name || "My sitio isn't listed"}</Text>
+                  {!name && <Text style={styles.geoSub}>Your barangay will be told so they can add it. Fill in a landmark below.</Text>}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      <Modal visible={showPreview && Boolean(form.facadeUri)} transparent animationType="fade" onRequestClose={() => setShowPreview(false)}>
         <View style={styles.fullscreenBg}>
           <View style={styles.fullscreenHeader}>
             <Text style={styles.fullscreenTitle}>Your house</Text>
@@ -448,7 +460,9 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
 
-  topHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#FFF', borderBottomWidth: 1, borderColor: '#E2E8F0' },
+  topHeader: { paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#FFF', borderBottomWidth: 1, borderColor: '#E2E8F0', gap: 10 },
+  headerActions: { flexDirection: 'row', gap: 8 },
+  headerActionBtn: { flex: 1, minHeight: 44, marginBottom: 0, paddingVertical: 0, justifyContent: 'center', alignItems: 'center' },
   headerTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   headerTitle: { fontSize: FONT_SIZES.title, fontWeight: FONT_WEIGHTS.black, color: '#0F172A' },
   headerSub: { fontSize: FONT_SIZES.caption, fontWeight: FONT_WEIGHTS.bold, color: '#64748B', marginTop: 2 },
@@ -464,6 +478,10 @@ const styles = StyleSheet.create({
   fieldLabel: { fontSize: FONT_SIZES.caption, fontWeight: FONT_WEIGHTS.extraBold, color: '#475569', marginBottom: 4, marginTop: 6 },
   input: { backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#CBD5E1', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, fontSize: FONT_SIZES.body, color: '#0F172A', fontWeight: FONT_WEIGHTS.medium },
   inputLocked: { backgroundColor: '#F1F5F9', color: '#64748B' },
+  sitioSelect: { justifyContent: 'center', minHeight: 40 },
+  sitioSelectText: { fontSize: FONT_SIZES.body, color: '#0F172A', fontWeight: FONT_WEIGHTS.medium },
+  sitioOption: { paddingVertical: 11, borderBottomWidth: 1, borderColor: '#F1F5F9' },
+  sitioOptionText: { fontSize: FONT_SIZES.body, fontWeight: FONT_WEIGHTS.bold, color: '#1E293B' },
 
   /* Geotag box */
   geoBox: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE', borderRadius: 8, padding: 10, marginTop: 4, marginBottom: 8 },
@@ -471,8 +489,6 @@ const styles = StyleSheet.create({
   geoSub: { fontSize: FONT_SIZES.tiny, color: '#64748B', marginTop: 2 },
   btnUseLocation: { backgroundColor: '#1E3A8A', borderRadius: 8, paddingVertical: 11, alignItems: 'center', marginBottom: 10 },
   btnUseLocationText: { color: '#FFFFFF', fontWeight: '900', fontSize: 13 },
-  btnCalibrate: { backgroundColor: '#1E3A8A', paddingHorizontal: 10, paddingVertical: 7, borderRadius: 6 },
-  btnCalibrateText: { color: '#FFF', fontSize: FONT_SIZES.tiny, fontWeight: FONT_WEIGHTS.extraBold },
 
   facadeBox: { flexDirection: 'row', gap: 12, alignItems: 'center', backgroundColor: '#F8FAFC', padding: 10, borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', marginTop: 4 },
   facadeImg: { width: 72, height: 72, borderRadius: 8, borderWidth: 1, borderColor: '#CBD5E1' },
