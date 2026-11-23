@@ -64,6 +64,12 @@ export default function ResidentEvacMapScreen() {
   // The rescue unit coming to this resident (live position and reserved center).
   const rescue = useMyRescue();
   const missionTarget = centerTargetOf(rescue.mission);
+  // "Show me the way" on the Shelters tab: draw the route to that centre. A rescue's reserved
+  // centre still wins, so the household is never pointed two ways at once.
+  const goShelter = params.goCenterId ? shelters.find((c) => String(c.id) === String(params.goCenterId)) : null;
+  const shelterTarget = goShelter
+    ? { key: `go:${goShelter.id}:${params.goCenterTs || ''}`, lat: goShelter.lat, lng: goShelter.lng, name: goShelter.name, note: 'Evacuation center' }
+    : null;
 
   const distFromHome = distanceMeters(userGpsCoords, homeCoords) || 0;
   const isDisplaced = distFromHome > 35;
@@ -266,7 +272,7 @@ export default function ResidentEvacMapScreen() {
         triggerGpsQuery={triggerGpsQuery}
         focusPoint={disasterFocus}
         selectedHazardPin={hazardFocus}
-        missionTarget={missionTarget}
+        missionTarget={missionTarget || shelterTarget}
         onHazardCoordinateDrop={(c) => {
           setIsDroppingHazard(false);
           if (!isInCordova(c.lat, c.lng)) {
