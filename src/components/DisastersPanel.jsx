@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity } from 'react-native';
 import { useShowDisasterOnMap } from './DisasterBanner';
 import { getDisasterHistory } from '../services/api';
+import { splitEndReason } from '../utils/disasterAdvice';
 
 const HAZARD_ICON = { flood: '🌊', fire: '🔥', landslide: '⛰️', storm: '🌀', typhoon: '🌀', earthquake: '🌐', storm_surge: '🌊' };
 const typeLabel = (t) => (t ? t.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase()) : 'Disaster');
@@ -79,7 +80,10 @@ export default function DisastersPanel({ events = [], barangayId = null }) {
             <Text style={styles.title}>{HAZARD_ICON[e.hazard_type] || '⚠️'} {typeLabel(e.hazard_type)}: {e.name}</Text>
             <Text style={styles.sub}>Brgy. {e.barangay_name}{e.location_description ? ` • ${e.location_description}` : ''}</Text>
             <Text style={styles.meta}>{day(e.started_at)} – {day(e.resolved_at)}</Text>
-            {!!e.resolution_reason && <Text style={styles.reason}>Ended: {e.resolution_reason}</Text>}
+            {(() => { const { advice, reason } = splitEndReason(e.resolution_reason); return <>
+              {!!advice && <Text style={styles.advice}>Advice: {advice}</Text>}
+              {!!reason && <Text style={styles.reason}>Ended: {reason}</Text>}
+            </>; })()}
           </View>
         );
       }}
@@ -88,6 +92,7 @@ export default function DisastersPanel({ events = [], barangayId = null }) {
 }
 
 const styles = StyleSheet.create({
+  advice: { fontSize: 14, fontWeight: '900', color: '#15803D', marginTop: 6 },
   btnMore: { marginTop: 4, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: '#CBD5E1', backgroundColor: '#FFF', alignItems: 'center' },
   btnMoreText: { fontSize: 14, fontWeight: '800', color: '#1E3A8A' },
   header: { fontSize: 12, fontWeight: '800', color: '#64748B', marginTop: 4 },

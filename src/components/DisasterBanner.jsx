@@ -3,7 +3,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Alert, TouchableOpacity } from 'react-native';
 import { useRouter, useSegments } from 'expo-router';
-import { getPublicMap, onLiveSignal } from '../services/api';
+import { getPublicMap, getDisasterHistory, onLiveSignal } from '../services/api';
+import { splitEndReason, isGoHome } from '../utils/disasterAdvice';
 import { prepareAlarm, soundAlarm, stopAlarm, onAlarmTap } from '../lib/alarm';
 
 const HAZARD_ICON = { flood: '🌊', fire: '🔥', landslide: '⛰️', storm: '🌀', typhoon: '🌀', earthquake: '🌐', storm_surge: '🌊' };
@@ -56,6 +57,56 @@ export function useNewDisasterAlert(events, { ready = true } = {}) {
   }, [events, ready, showOnMap]);
 }
 
+// Pops up the admin's advice ("Safe to go home" / "Stay at the evacuation center for now")
+// when a declaration that was active on the previous load has ended.
+export function useEndedDisasterAlert(events, { ready = true } = {}) {
+  const seen = useRef(null);
+  useEffect(() => {
+    if (!ready) return;
+    const before = seen.current;
+    seen.current = new Map(events.map((e) => [e.event_id, e]));
+    if (!before) return;
+    const gone = [...before.keys()].filter((id) => !seen.current.has(id));
+    if (!gone.length) return;
+    (async () => {
+      let past = [];
+      try { past = (await getDisasterHistory(10)) || []; } catch { /* offline: say it ended without the advice */ }
+      for (const id of gone) {
+        const ended = past.find((p) => p.event_id === id) || before.get(id);
+        const { advice, reason } = splitEndReason(ended?.resolution_reason);
+        const head = advice ? `${isGoHome(advice) ? '🏠' : '🏫'} ${advice}` : 'The MDRRMO ended this disaster.';
+        Alert.alert(`✅ Disaster ended: ${ended?.name || 'Disaster'}`, [head, reason ? `Reason: ${reason}` : ''].filter(Boolean).join('\n\n'));
+      }
+    })();
+  }, [events, ready]);
+}
+
+// Resident home: the advice of the latest disaster that ended in the barangay in the last 24 hours,
+// shown while nothing else is declared there.
+export function EndedDisasterNotice({ barangayId, activeCount = 0, style }) {
+  const [last, setLast] = useState(null);
+  useEffect(() => {
+    if (barangayId == null || activeCount > 0) { setLast(null); return; }
+    let alive = true;
+    getDisasterHistory(5).then((rows) => {
+      const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+      const mine = (rows || []).find((e) => e.barangay_id === barangayId && e.resolved_at && new Date(e.resolved_at).getTime() > dayAgo);
+      if (alive) setLast(mine || null);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [barangayId, activeCount]);
+  if (!last) return null;
+  const { advice, reason } = splitEndReason(last.resolution_reason);
+  const home = isGoHome(advice);
+  return (
+    <View style={[styles.ended, home ? styles.endedHome : styles.endedStay, style]} accessibilityRole="summary">
+      <Text style={styles.endedTitle}>✅ {last.name} has ended</Text>
+      {!!advice && <Text style={styles.endedAdvice}>{home ? '🏠' : '🏫'} {advice}</Text>}
+      {!!reason && <Text style={styles.endedReason}>Reason: {reason}</Text>}
+    </View>
+  );
+}
+
 // Active declarations, live: reloads when the web console declares or ends one.
 // barangayId limits them to one barangay (residents); leave it out for all of Cordova (rescuers).
 export function useActiveDisasters({ barangayId = null, enabled = true } = {}) {
@@ -82,6 +133,7 @@ export function useActiveDisasters({ barangayId = null, enabled = true } = {}) {
 export function DisasterWatcher({ barangayId = null, enabled = true }) {
   const { events, ready } = useActiveDisasters({ barangayId, enabled });
   useNewDisasterAlert(events, { ready });
+  useEndedDisasterAlert(events, { ready });
   useEffect(() => {
     if (!enabled) return undefined;
     prepareAlarm();
@@ -126,6 +178,12 @@ export default function DisasterBanner({ events, style, compact = false }) {
 }
 
 const styles = StyleSheet.create({
+  ended: { padding: 12, borderRadius: 12, borderWidth: 1, borderLeftWidth: 5 },
+  endedHome: { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0', borderLeftColor: '#15803D' },
+  endedStay: { backgroundColor: '#FFFBEB', borderColor: '#FDE68A', borderLeftColor: '#B45309' },
+  endedTitle: { fontSize: 14, fontWeight: '900', color: '#0F172A' },
+  endedAdvice: { fontSize: 17, fontWeight: '900', color: '#0F172A', marginTop: 6 },
+  endedReason: { fontSize: 13, color: '#334155', marginTop: 4 },
   wrap: { backgroundColor: '#B91C1C', paddingVertical: 10, paddingHorizontal: 14, gap: 8 },
   row: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   icon: { fontSize: 22 },

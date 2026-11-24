@@ -10,7 +10,7 @@ import {
   getMySos, raiseSos, cancelSos, getHouseholdStatus, setMemberMissing, getPublicMap, subscribe, onLiveSignal,
   getMyPreemptive, personBadge, MOBILITY_LABELS,
 } from '../../services/api';
-import DisasterBanner from '../../components/DisasterBanner';
+import DisasterBanner, { EndedDisasterNotice } from '../../components/DisasterBanner';
 import AtCentreCard from '../../components/AtCentreCard';
 import { useMyRescue, RescueStatusCard } from '../../components/RescueWatcher';
 import { getCurrentCoords, distanceMeters, formatDistance, shelterLoad } from '../../lib/location';
@@ -216,6 +216,8 @@ export default function ResidentDashboard() {
 
       {/* Active disaster declarations for the resident's barangay (live from the web console) */}
       <DisasterBanner compact events={events} style={{ marginHorizontal: 14, marginTop: 8 }} />
+      {/* After a disaster ends: the admin's advice (go home / stay at the center) */}
+      <EndedDisasterNotice barangayId={profile?.resident?.barangay_id ?? null} activeCount={events.length} style={{ marginHorizontal: 14, marginTop: 8 }} />
 
       {/* Who in the household is at an evacuation center, with Check out */}
       <AtCentreCard people={people} profileUid={profile?.uid} activeDisasters={events} onDone={load}
