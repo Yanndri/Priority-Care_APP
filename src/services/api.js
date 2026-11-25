@@ -349,7 +349,7 @@ export const requestBackup = (ticketId, need, note = '') =>
 export const cancelBackupRequest = (requestId) =>
   call(supabase.rpc('close_backup_request', { p_request_id: requestId, p_action: 'cancel' }));
 
-// Hazard alarms (STEP 20): "I see it too" from people within 10 km, and the alarm level
+// Hazard alarms (STEP 20): "I see it too" from people within 1 km, and the alarm level
 // (1 + confirmations + other reports of the same type within 300 m).
 export const getHazardAlarms = () => call(supabase.rpc('get_hazard_alarms'));
 export const confirmHazard = (hazardId, coords) =>

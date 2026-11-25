@@ -42,7 +42,7 @@ export default function ResidentHazardsScreen() {
   // My reports: the 3 latest at first; "Show more" loads 10 more.
   const [mineLimit, setMineLimit] = useState(3);
   const [mineMore, setMineMore] = useState(false);
-  // Reports near you that nobody has confirmed yet (last 6 hours, within 10 km): you can still say
+  // Reports near you that nobody has confirmed yet (last 6 hours, within 1 km): you can still say
   // "I see it too" here, even if you pressed "Not sure" on the pop-up.
   const [toCheck, setToCheck] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -168,7 +168,7 @@ export default function ResidentHazardsScreen() {
           <Text style={styles.empty}>
             {error ? `Could not load hazards: ${error}`
               : tab === 'CONFIRMED' ? 'No confirmed hazards right now.'
-              : tab === 'UNCONFIRMED' ? 'No unchecked reports within 10 km of you in the last 6 hours.'
+              : tab === 'UNCONFIRMED' ? 'No unchecked reports within 1 km of you in the last 6 hours.'
               : 'You have not reported any hazards yet.'}
           </Text>
         }

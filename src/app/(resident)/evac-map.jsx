@@ -53,7 +53,7 @@ export default function ResidentEvacMapScreen() {
 
   const [hazards, setHazards] = useState([]);
   const [myReports, setMyReports] = useState([]);
-  // Other people's reports within 10 km (last 6 h) that nobody has confirmed yet: shown faded.
+  // Other people's reports within 1 km (last 6 h) that nobody has confirmed yet: shown faded.
   const [nearbyUnchecked, setNearbyUnchecked] = useState([]);
   const [shelters, setShelters] = useState([]);
   // Every disaster declared right now in Cordova, always on the map (refreshes live).
