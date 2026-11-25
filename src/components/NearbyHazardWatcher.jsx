@@ -1,5 +1,5 @@
 // "Do you see it too?" Mounted once per portal (residents and responders). When someone else
-// pins a hazard within 1 km of you, a prompt pops up on whatever screen is open. Saying yes
+// pins a hazard within 10 km of you, a prompt pops up on whatever screen is open. Saying yes
 // raises the hazard's alarm level (2nd / 3rd alarm) on the admin's web console.
 // Works only while the app is open: Expo Go has no push notifications.
 import { useCallback, useEffect, useRef } from 'react';

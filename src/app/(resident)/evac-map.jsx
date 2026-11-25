@@ -10,7 +10,8 @@ import { HAZARD_OPTIONS } from '../../constants/options';
 import { FONT_SIZES, FONT_WEIGHTS } from '../../constants/typography';
 import { getMyHazardReports, getNearbyHazards, getPublicMap, reportHazard, subscribe, withdrawMyHazard } from '../../services/api';
 import { getCurrentCoords, distanceMeters, watchCoords } from '../../lib/location';
-import { toMapHazard, toMapShelter } from '../../lib/mapData';
+import { toMapDisaster, toMapHazard, toMapShelter } from '../../lib/mapData';
+import { useActiveDisasters } from '../../components/DisasterBanner';
 import { useMyRescue, centerTargetOf, RescueStatusCard } from '../../components/RescueWatcher';
 import { getDemoSpot, getSharedLocation, setDemoSpot, setSharedLocation } from '../../lib/sharedLocation';
 
@@ -52,9 +53,12 @@ export default function ResidentEvacMapScreen() {
 
   const [hazards, setHazards] = useState([]);
   const [myReports, setMyReports] = useState([]);
-  // Other people's reports within 1 km (last 6 h) that nobody has confirmed yet: shown faded.
+  // Other people's reports within 10 km (last 6 h) that nobody has confirmed yet: shown faded.
   const [nearbyUnchecked, setNearbyUnchecked] = useState([]);
   const [shelters, setShelters] = useState([]);
+  // Every disaster declared right now in Cordova, always on the map (refreshes live).
+  const { events: activeDisasters } = useActiveDisasters();
+  const mapDisasters = useMemo(() => activeDisasters.map(toMapDisaster), [activeDisasters]);
   const [sending, setSending] = useState(false);
   const [isDroppingHazard, setIsDroppingHazard] = useState(false);
   const [pendingCoords, setPendingCoords] = useState(null);
@@ -271,6 +275,7 @@ export default function ResidentEvacMapScreen() {
         isDroppingHazard={isDroppingHazard}
         triggerGpsQuery={triggerGpsQuery}
         focusPoint={disasterFocus}
+        disasters={mapDisasters}
         selectedHazardPin={hazardFocus}
         missionTarget={missionTarget || shelterTarget}
         onHazardCoordinateDrop={(c) => {

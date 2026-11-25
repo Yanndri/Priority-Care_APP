@@ -8,6 +8,7 @@ import BottomNav from '../../components/BottomNav';
 import { COLORS } from '../../constants/colors';
 import { HAZARD_OPTIONS, RESCUER_DEFAULT_COORDS } from '../../constants/options';
 import { useRescuerFeed } from '../../lib/rescuerFeed';
+import { toMapDisaster } from '../../lib/mapData';
 import { formatDistance, getCurrentCoords } from '../../lib/location';
 import { useTracker } from '../../lib/rescueTracker';
 import RescueCard from '../../components/RescueCard';
@@ -100,6 +101,8 @@ export default function RescuerMapScreen() {
     backups: r.ticketId ? backups.filter((b) => b.ticket_id === r.ticketId) : [],
   }));
   const hazards = feed.hazards;
+  // Every disaster declared right now in Cordova, always on the map.
+  const mapDisasters = useMemo(() => (feed.events || []).map(toMapDisaster), [feed.events]);
   const setNote = (id, patch) => setLocalNotes((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
   const [selectedResident, setSelectedResident] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -129,7 +132,8 @@ export default function RescuerMapScreen() {
   }, [disasterFocus]);
   const [showActiveSosOnly, setShowActiveSosOnly] = useState(true);
 
-  // Simulated GPS is a development tool only; release builds always use the phone's GPS.
+  // Development builds start on a demo position; release builds start on the phone's GPS
+  // (a demo location can still be picked from the GPS menu, e.g. for a demo outside Cordova).
   const [gpsMode, setGpsMode] = useState(__DEV__ ? 'SIMULATED' : 'REAL');
   const [isSettingSimGps, setIsSettingSimGps] = useState(false);
   const [isLocatingGps, setIsLocatingGps] = useState(false);
@@ -234,7 +238,7 @@ export default function RescuerMapScreen() {
   const tracker = useTracker({ active: mapFocused });
   useEffect(() => {
     if (!tracker.fix) return;
-    if (gpsMode !== 'REAL' && __DEV__) return; // a developer placed the unit by hand
+    if (gpsMode !== 'REAL') return; // a demo location was picked by hand
     if (gpsMode !== 'REAL') setGpsMode('REAL');
     placeUnit({ lat: tracker.fix.lat, lng: tracker.fix.lng });
   }, [tracker.fix, gpsMode]);
@@ -620,6 +624,7 @@ export default function RescuerMapScreen() {
         selectedResident={selectedResident}
         selectedHazardPin={selectedHazardPin}
         focusPoint={disasterFocus}
+        disasters={mapDisasters}
         missionTarget={missionTarget}
         onPinSelect={(res) => {
           setSelectedBarangay(null);
@@ -680,6 +685,8 @@ export default function RescuerMapScreen() {
               onPress={() => {
                 if (gpsMode === 'REAL') setIsLocatingGps(true);
                 setTriggerGpsQuery(Date.now());
+                // On a demo location, a tap also opens the location menu so a new spot can be picked.
+                if (gpsMode !== 'REAL') setGpsModalVisible(true);
               }}
               onLongPress={() => setGpsModalVisible(true)}
               activeOpacity={0.8}
@@ -1198,8 +1205,8 @@ export default function RescuerMapScreen() {
                 </Text>
               </TouchableOpacity>
 
-              {/* Simulated positions are for development builds only. */}
-              {__DEV__ && (<>
+              {/* Demo positions (for testing, or a demo outside Cordova). */}
+              <>
               <TouchableOpacity
                 style={[styles.optBtn, gpsMode === 'SIMULATED' && styles.optBtnActive]}
                 onPress={() => {
@@ -1229,7 +1236,7 @@ export default function RescuerMapScreen() {
                   🕹️ Demo: Poblacion command post
                 </Text>
               </TouchableOpacity>
-              </>)}
+              </>
             </View>
 
             <TouchableOpacity style={styles.btnCancel} onPress={() => setGpsModalVisible(false)}>

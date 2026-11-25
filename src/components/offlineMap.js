@@ -19,6 +19,7 @@ export default function OfflineMap({
   triggerGpsQuery = 0,
   selectedBarangay = null,
   focusPoint = null, // { key, lat, lng, label, note, icon, barangay }: flies to a disaster and marks it
+  disasters = [], // active declared disasters, always shown: [{ key, lat, lng, label, note, icon }]
   selectedResident = null,
   selectedHazardPin = null,
   // Evacuation center reserved for the mission: { key, lat, lng, name } (null clears).
@@ -65,6 +66,9 @@ export default function OfflineMap({
       if (typeof window.syncShelters === 'function') {
         window.syncShelters(${JSON.stringify(shelters)}, ${JSON.stringify(gpsLabel)});
       }
+      if (typeof window.syncDisasters === 'function') {
+        window.syncDisasters(${JSON.stringify(disasters)});
+      }
       window.__pinLabel = ${JSON.stringify(pinLabel)};
       if (typeof window.syncResidents === 'function') {
         window.syncResidents(
@@ -107,6 +111,7 @@ export default function OfflineMap({
     residents,
     hazards,
     shelters,
+    disasters,
     gpsLabel,
     isDroppingHazard,
     isSettingSimGps,
@@ -295,19 +300,21 @@ export default function OfflineMap({
       <body>
         <div id="map"></div>
         <script>
-          // Opens on Cordova and cannot be moved or zoomed out past it.
-          var CORDOVA_BOUNDS = [[10.175, 123.895], [10.295, 124.02]];
+          // Opens on Cordova. It can be moved around Metro Cebu (Cebu City, Mandaue, Talisay,
+          // Mactan) but not past it. Saved offline tiles still cover Cordova only; elsewhere
+          // the map needs a signal.
+          var MAP_BOUNDS = [[10.15, 123.78], [10.48, 124.08]];
           var map = L.map('map', { 
             zoomControl: false,
             minZoom: 13,
             maxZoom: 19,
-            maxBounds: CORDOVA_BOUNDS,
+            maxBounds: MAP_BOUNDS,
             maxBoundsViscosity: 1.0
           }).setView([10.2526, 123.9496], 14);
 
           var tileLayer = L.tileLayer('${tileSource}', {
             minZoom: 13,
-            bounds: CORDOVA_BOUNDS,
+            bounds: MAP_BOUNDS,
             // Online, OpenStreetMap has sharp tiles down to street level (19). Saved offline
             // tiles only go to 16, so past that they are just enlarged.
             maxNativeZoom: ${isOffline ? 16 : 19},
@@ -912,10 +919,54 @@ export default function OfflineMap({
           // Flies to a declared disaster and drops a pulsing red pin on it. Without exact
           // coordinates it zooms to the disaster's barangay instead.
           var disasterMarker = null;
+          // Every active disaster stays on the map (not only after "Show on map").
+          var activeDisasterMarkers = [];
+          function disasterIcon(p) {
+            return L.divIcon({
+              className: 'disaster-pin-wrapper',
+              html: '<div class="disaster-pin">' + escapeHtml(p.icon || '⚠️') + '</div>',
+              iconSize: [40, 40],
+              iconAnchor: [20, 20]
+            });
+          }
+          function disasterPopup(p) {
+            return '<b>' + escapeHtml(p.label || 'Disaster') + '</b>' + (p.note ? '<br>' + escapeHtml(p.note) : '');
+          }
+          function activeDisasterAt(lat, lng) {
+            return activeDisasterMarkers.filter(function(m) {
+              var ll = m.getLatLng();
+              return Math.abs(ll.lat - lat) < 1e-6 && Math.abs(ll.lng - lng) < 1e-6;
+            })[0] || null;
+          }
+          var activeDisasterSig = null;
+          window.syncDisasters = function(list) {
+            // Redraw only when the list changed, so an open popup is not closed on every refresh.
+            var sig = JSON.stringify(list || []);
+            if (sig === activeDisasterSig) return;
+            activeDisasterSig = sig;
+            activeDisasterMarkers.forEach(function(m) { map.removeLayer(m); });
+            activeDisasterMarkers = [];
+            (list || []).forEach(function(p) {
+              if (!p.lat || !p.lng) return;
+              activeDisasterMarkers.push(L.marker([p.lat, p.lng], { icon: disasterIcon(p), zIndexOffset: 1000 })
+                .addTo(map)
+                .bindPopup(disasterPopup(p), { autoPan: false }));
+            });
+            // The "Show on map" pin is no longer needed once the same spot is drawn here.
+            if (disasterMarker) {
+              var ll = disasterMarker.getLatLng();
+              if (activeDisasterAt(ll.lat, ll.lng)) { map.removeLayer(disasterMarker); disasterMarker = null; }
+            }
+          };
           window.focusDisasterPoint = function(p) {
             if (!p) return;
             if (disasterMarker) { map.removeLayer(disasterMarker); disasterMarker = null; }
-            if (p.lat && p.lng) {
+            if (p.lat && p.lng && activeDisasterAt(Number(p.lat), Number(p.lng))) {
+              var shown = activeDisasterAt(Number(p.lat), Number(p.lng));
+              window.clearRouteSlot('disaster');
+              map.flyTo([p.lat, p.lng], 16, { animate: true, duration: 0.8 });
+              setTimeout(function() { shown.openPopup(); }, 900);
+            } else if (p.lat && p.lng) {
               var icon = L.divIcon({
                 className: 'disaster-pin-wrapper',
                 html: '<div class="disaster-pin">' + escapeHtml(p.icon || '⚠️') + '</div>',

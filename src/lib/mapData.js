@@ -20,6 +20,18 @@ export const toMapHazard = (h) => ({
   eventId: h.event_id || null, // set when the report is part of a declared disaster (STEP21)
 });
 
+// Active declared disasters (from get_public_map / get_rescuer_feed events), always drawn on the maps.
+const DISASTER_ICONS = { flood: '🌊', fire: '🔥', landslide: '⛰️', storm: '🌀', typhoon: '🌀', earthquake: '🌐', storm_surge: '🌊' };
+const disasterType = (t) => (t ? t.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase()) : 'Disaster');
+export const toMapDisaster = (e) => ({
+  key: String(e.event_id),
+  lat: e.latitude != null ? Number(e.latitude) : null,
+  lng: e.longitude != null ? Number(e.longitude) : null,
+  icon: DISASTER_ICONS[e.hazard_type] || '⚠️',
+  label: `${disasterType(e.hazard_type)}: ${e.name}`,
+  note: [`Brgy. ${e.barangay_name}`, e.location_description].filter(Boolean).join(' • '),
+});
+
 export const toMapShelter = (c) => ({
   id: c.center_id,
   name: c.center_name,

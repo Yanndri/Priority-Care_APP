@@ -5,7 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Directory, File, Paths } from 'expo-file-system';
 
 const INFO_KEY = 'pc.offlineMap.v1'; // { savedAt, tiles }
-const BOUNDS = { minLat: 10.175, maxLat: 10.295, minLon: 123.895, maxLon: 124.02 }; // same as the map limits
+const BOUNDS = { minLat: 10.175, maxLat: 10.295, minLon: 123.895, maxLon: 124.02 }; // Cordova only; the map itself can pan around Metro Cebu online
 const ZOOMS = [13, 14, 15, 16];
 const BATCH = 6;
 

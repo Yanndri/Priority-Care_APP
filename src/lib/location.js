@@ -1,6 +1,7 @@
 // Device position helpers. Every function returns null instead of throwing
 // when permission is refused or no fix is available.
 import * as Location from 'expo-location';
+import { getDemoSpot } from './sharedLocation';
 
 // Resolves to null after ms, so a missing GPS fix never blocks the caller (an SOS above all).
 const withTimeout = (promise, ms) => Promise.race([
@@ -11,7 +12,11 @@ const withTimeout = (promise, ms) => Promise.race([
 // Never waits longer than timeoutMs for a fresh fix (default 10 s when precise, 8 s otherwise).
 // Without a fresh fix it falls back to the phone's last known position (up to 30 min old),
 // then to null, so the caller can use the registered home location instead.
+// A demo location picked on the map (e.g. for a demo outside Cordova) wins over the phone's GPS
+// until "Use phone GPS" is chosen again, so the SOS, nearest shelters and hazard reports all use it.
 export async function getCurrentCoords({ precise = false, timeoutMs } = {}) {
+  const demo = getDemoSpot();
+  if (demo) return demo;
   try {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') return null;
